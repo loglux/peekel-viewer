@@ -26,6 +26,9 @@ pub struct Book {
     /// The quarter turns given to the whole file, and those of single pages.
     pub file_turn: i32,
     pub turns: Vec<(usize, i32)>,
+    /// For a book whose text flows (FB2, EPUB): the place of `page` in its text (`peekel_core::decode::place_of`) and the size of the
+    /// text it was laid out at; at another size the page is found again from the place.
+    pub place: Option<(usize, u32)>,
 }
 
 /// Everything remembered, and where it is kept (nowhere: nothing is read or written).
@@ -75,6 +78,26 @@ impl State {
                         self.books.push(((*key).to_string(), book));
                     }
                 }
+                [
+                    "book",
+                    key,
+                    size,
+                    page,
+                    cover,
+                    file_turn,
+                    kept,
+                    turns,
+                    count,
+                    equal,
+                    place,
+                ] => {
+                    if let Some(book) = parse_book(size, page, cover, file_turn, kept, turns, count, equal) {
+                        let place = place
+                            .split_once('@')
+                            .and_then(|(w, p)| Some((w.parse().ok()?, p.parse().ok()?)));
+                        self.books.push(((*key).to_string(), Book { place, ..book }));
+                    }
+                }
                 _ => {}
             }
         }
@@ -120,13 +143,14 @@ impl State {
                     .join(",")
             };
             out += &format!(
-                "book\t{key}\t{}\t{}\t{}\t{}\t{kept}\t{turns}\t{}\t{}\n",
+                "book\t{key}\t{}\t{}\t{}\t{}\t{kept}\t{turns}\t{}\t{}\t{}\n",
                 b.size,
                 b.page,
                 option(b.cover_alone.map(|v| v.to_string())),
                 b.file_turn,
                 option(b.count.map(|v| v.to_string())),
                 option(b.equal_height.map(|v| v.to_string())),
+                option(b.place.map(|(w, p)| format!("{w}@{p}"))),
             );
         }
         out
@@ -188,6 +212,7 @@ fn parse_book(
         kept,
         file_turn: file_turn.parse::<i32>().ok()?.rem_euclid(4),
         turns,
+        place: None,
     })
 }
 
@@ -241,6 +266,7 @@ mod tests {
             }),
             file_turn: 1,
             turns: vec![(3, 2), (7, 1)],
+            place: Some((12_345, 130)),
         }
     }
 

@@ -13,6 +13,39 @@ pub fn is_picture(path: &Path) -> bool {
         || peekel_core::decode::is_special(path)
 }
 
+/// The endings of the names this program reads (without the dot, small letters, each once): the plain pictures, then the formats of
+/// `core`'s own.
+pub fn endings() -> Vec<&'static str> {
+    let mut all: Vec<&'static str> = Vec::new();
+    for ending in EXTENSIONS.into_iter().chain(peekel_core::decode::special_endings()) {
+        if !all.contains(&ending) {
+            all.push(ending);
+        }
+    }
+    all
+}
+
+/// The mask of Far Manager's file associations for these files: `*.png,*.jpg,...`.
+pub fn far_mask() -> String {
+    endings().iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(",")
+}
+
+/// The section of Midnight Commander's `mc.ext.ini` that opens these files with `peekel` (a key file of GLib, where `\\` is one
+/// backslash of the expression).
+pub fn mc_section() -> String {
+    mc_section_for("peekel")
+}
+
+/// As [`mc_section`], the program called as `command`. F3 and Enter both: mc takes the first section that matches and looks no
+/// further, so Enter would else do nothing for these files (`install.rs`).
+pub fn mc_section_for(command: &str) -> String {
+    let names: Vec<String> = endings().iter().map(|e| e.replace('.', "\\\\.")).collect();
+    format!(
+        "[Peekel]\nRegex=\\\\.({})$\nRegexIgnoreCase=true\nOpen={command} %f\nView={command} %f\n",
+        names.join("|")
+    )
+}
+
 /// Which files of the folder Space and Backspace go through (the setting `browse`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Listing {
@@ -20,7 +53,7 @@ pub enum Listing {
     Every,
     /// The pictures and the documents the viewer reads (the default).
     Pictures,
-    /// The books only (PDF and DjVu): the viewer as a reader.
+    /// The books only (PDF, DjVu, FB2 and EPUB): the viewer as a reader.
     Books,
 }
 
@@ -29,7 +62,12 @@ impl Listing {
         match self {
             Self::Every => true,
             Self::Pictures => is_picture(path),
-            Self::Books => peekel_core::pdf::is_pdf(path) || peekel_core::djvu::is_djvu(path),
+            Self::Books => {
+                peekel_core::pdf::is_pdf(path)
+                    || peekel_core::djvu::is_djvu(path)
+                    || peekel_core::fb2::is_fb2(path)
+                    || peekel_core::epub::is_epub(path)
+            }
         }
     }
 }
@@ -72,6 +110,52 @@ pub fn in_folder(path: &Path, listing: Listing) -> (Vec<PathBuf>, usize) {
 #[allow(clippy::expect_used)] // a test that cannot make its folder should stop at once
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_masks_name_every_format_once_and_only_what_is_read() {
+        let endings = endings();
+        for wanted in [
+            "png", "jpg", "dds", "nef", "svgz", "pdf", "djvu", "fb2.zip", "epub", "htm", "xlsx", "odp",
+        ] {
+            assert!(endings.contains(&wanted), "{wanted}");
+        }
+        for (i, e) in endings.iter().enumerate() {
+            assert!(!endings[i + 1..].contains(e), "{e} twice");
+            assert!(is_picture(Path::new(&format!("x.{e}"))), "{e}");
+        }
+        assert!(far_mask().starts_with("*.png,*.jpg,"));
+        assert!(far_mask().contains(",*.fb2.zip,"));
+        let mc = mc_section();
+        assert!(mc.contains("|fb2\\\\.zip|"), "{mc}");
+        assert!(mc.starts_with("[Peekel]\nRegex=\\\\.(png|jpg|"), "{mc}");
+    }
+
+    /// The README of the viewer shows the same masks as `--masks`: here in `public-viewer`, at the root in the public copy.
+    #[test]
+    fn the_readme_gives_the_masks_the_program_prints() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let Some(readme) = [root.join("../public-viewer/README.md"), root.join("../README.md")]
+            .into_iter()
+            .find(|p| p.is_file())
+        else {
+            panic!("no README beside the crate");
+        };
+        let text = std::fs::read_to_string(&readme)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
+        assert!(
+            text.contains(&far_mask()),
+            "{}: the mask of Far is not {}",
+            readme.display(),
+            far_mask()
+        );
+        let section: String = mc_section().lines().map(|l| format!("  {l}\n")).collect();
+        assert!(
+            text.contains(&section),
+            "{}: the section of mc is not\n{section}",
+            readme.display()
+        );
+    }
 
     /// A folder of its own under the system's temporary one, with the named empty files in it.
     fn folder_with(name: &str, files: &[&str]) -> PathBuf {
@@ -132,10 +216,16 @@ mod tests {
     }
 
     #[test]
-    fn with_books_only_the_pdf_and_djvu_files_and_the_one_opened() {
-        let dir = folder_with("books", &["a.pdf", "b.jpg", "c.DJVU", "d.zip"]);
+    fn with_books_only_the_pdf_djvu_fb2_and_epub_files_and_the_one_opened() {
+        let dir = folder_with(
+            "books",
+            &["a.pdf", "b.jpg", "c.DJVU", "d.zip", "e.fb2", "f.fb2.zip", "g.epub"],
+        );
         let (files, index) = in_folder(&dir.join("b.jpg"), Listing::Books);
-        assert_eq!(names(&files), ["a.pdf", "b.jpg", "c.DJVU"]);
+        assert_eq!(
+            names(&files),
+            ["a.pdf", "b.jpg", "c.DJVU", "e.fb2", "f.fb2.zip", "g.epub"]
+        );
         assert_eq!(index, 1);
         let _ = std::fs::remove_dir_all(&dir);
     }

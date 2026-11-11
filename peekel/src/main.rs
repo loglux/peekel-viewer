@@ -3,6 +3,7 @@
 
 mod files;
 mod find;
+mod install;
 mod keys;
 mod layout;
 mod settings;
@@ -16,7 +17,7 @@ use std::process::ExitCode;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use peekel_core::decode::{DecodeError, decode_page, mark_words, page_texts};
+use peekel_core::decode::{DecodeError, decode_page, mark_words, page_at, page_texts, place_of, text_flows};
 use peekel_core::photo::{Steady, quantize};
 use peekel_core::quantize::Indexed;
 use peekel_core::sixel;
@@ -45,7 +46,7 @@ keys:
   + -               zoom in, out         0   the whole picture      1   one pixel to one      w   as wide as the window
   arrows, h j k l   move the picture     Space, Backspace   the next, the previous file     g, G   the first, the last file
   Home, End         the beginning, the end of a book (in other files: the first, the last file)
-  Page Down, Up     the next, the previous spread of a PDF or DjVu book (two pages side by side; in other files: the next, the previous file)
+  Page Down, Up     the next, the previous spread of a PDF, DjVu, FB2 or EPUB book (two pages side by side; in other files: the next, the previous file)
   d                 pages side by side: 2, 3, 1     o   shift the pairs (the first page alone or with the second)     e   equal height or not
   i                 the properties of the file (a photograph's EXIF, a document's author and pages); again: back
   Shift, Ctrl+arrows   a bigger step: half a window, a whole one (H J K L: half)
@@ -63,7 +64,16 @@ options:
   --cards       a file that is no picture (a font, an archive, a program) is shown as a card: its kind, its size and dates, and
                 for a font a sample of text; without this such a file is skipped quietly (also PEEKEL_CARDS=1, or the
                 settings: s)
-  --timing      after the picture is closed, print how long each stage took";
+  --timing      after the picture is closed, print how long each stage took
+  --masks far   print the mask of the files it reads, for Far Manager's file associations (F3)
+  --masks mc    print the section of Midnight Commander's mc.ext.ini that opens them with peekel
+
+installing (each step asks first; --yes answers yes to all):
+  --install             copy itself to %LOCALAPPDATA%\\Programs\\peekel (Windows; its folder put on PATH) or ~/.local/bin, the
+                        fonts beside it to its own folder (Linux), and set up the file managers it finds
+  --setup far [Far.exe] Far Manager's F3 opens these files in peekel (Far closed; its associations backed up first)
+  --setup mc            Midnight Commander's F3 and Enter open them (mc.ext.ini backed up first)
+  --uninstall           take all of that away again";
 
 /// Device attributes (a 4 in the answer means Sixel), the cell's size in pixels and the terminal's background colour.
 const QUESTIONS: &str = "\x1b[?9001$p\x1b[c\x1b[16t\x1b]11;?\x1b\\";
@@ -133,6 +143,10 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("o", "shift the pairs: the first page alone, or with the second"),
     ("e", "pages of a spread equally high, or each in its own size"),
     (
+        "f, F",
+        "the text of an FB2 or EPUB book larger, smaller (laid out again)",
+    ),
+    (
         "r, R",
         "turn the page a quarter clockwise, the other way (for a page scanned on its side)",
     ),
@@ -142,7 +156,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
 ];
 
 /// How many rows the screen of the settings has (`Viewer::menu_rows`).
-const MENU_ROWS: usize = 5;
+const MENU_ROWS: usize = 6;
 
 /// The screen of the settings, while it is shown: the row chosen (the rows are made from the settings: `Viewer::menu_rows`).
 struct Menu {
@@ -247,6 +261,17 @@ struct Toc {
 /// The line of the contents that is the chapter of page `page` (counted from 0): the one with the greatest page that is not past it, the
 /// last of them when several lines have the same page; the first line when no line is as early. (Not the last line whose page is not
 /// past it: a book may end its contents with a line that leads back to an early page, and that line would be chosen for every page.)
+/// The page a remembered book is opened on: the page it was left on, or for a book whose text flows left at another size of the text,
+/// the page its place is on now (the book is laid out for that).
+fn page_of(path: &Path, book: &Book) -> usize {
+    match book.place {
+        Some((place, percent)) if percent != peekel_core::book::text_size() => {
+            page_at(path, place).ok().flatten().unwrap_or(book.page)
+        }
+        _ => book.page,
+    }
+}
+
 fn chapter_at(items: &[peekel_core::djvu::ContentsItem], page: usize) -> usize {
     items
         .iter()
@@ -293,8 +318,40 @@ fn main() -> ExitCode {
         cards: std::env::var("PEEKEL_CARDS").is_ok_and(|v| !v.is_empty() && v != "0"),
     };
     let mut path: Option<OsString> = None;
-    for arg in std::env::args_os().skip(1) {
+    let mut args = std::env::args_os().skip(1);
+    let mut action: Option<install::Action> = None;
+    let mut yes = false;
+    while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--install") => action = Some(install::Action::Install),
+            Some("--uninstall") => action = Some(install::Action::Uninstall),
+            Some("--yes") => yes = true,
+            Some("--setup") => {
+                action = match args.next().as_deref().and_then(|a| a.to_str()) {
+                    Some("mc") => Some(install::Action::SetupMc),
+                    Some("far") => Some(install::Action::SetupFar(None)),
+                    _ => {
+                        eprintln!("peekel: --setup mc, or --setup far [path of Far.exe]");
+                        return ExitCode::from(2);
+                    }
+                };
+            }
+            Some("--masks") => {
+                return match args.next().as_deref().and_then(|a| a.to_str()) {
+                    Some("far") => {
+                        println!("{}", files::far_mask());
+                        ExitCode::SUCCESS
+                    }
+                    Some("mc") => {
+                        print!("{}", files::mc_section());
+                        ExitCode::SUCCESS
+                    }
+                    _ => {
+                        eprintln!("peekel: --masks far, or --masks mc");
+                        ExitCode::from(2)
+                    }
+                };
+            }
             Some("-h" | "--help") => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -310,12 +367,23 @@ fn main() -> ExitCode {
             Some("--cards") => options.cards = true,
             Some("--no-state") => options.remember = false,
             _ => {
-                if path.replace(arg).is_some() {
+                if let Some(install::Action::SetupFar(far @ None)) = &mut action {
+                    *far = Some(PathBuf::from(arg));
+                } else if path.replace(arg).is_some() {
                     eprintln!("peekel: one picture at a time\n{USAGE}");
                     return ExitCode::from(2);
                 }
             }
         }
+    }
+    if let Some(action) = action {
+        return match install::run(&action, &install::Asker { yes }) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => {
+                eprintln!("peekel: {message}");
+                ExitCode::FAILURE
+            }
+        };
     }
     let Some(path) = path else {
         eprintln!("{USAGE}");
@@ -1091,7 +1159,7 @@ impl Viewer {
         let page = if next == self.index {
             spread.start_of(page)
         } else {
-            self.first_page(next)
+            self.first_page(next, false)
         };
         if self
             .preload
@@ -1248,10 +1316,15 @@ impl Viewer {
             .unwrap_or_default();
         self.settings.spread(own)
     }
-    /// The page file `index` is opened on: where it was left, if that is remembered.
-    fn first_page(&mut self, index: usize) -> usize {
+    /// The page file `index` is opened on: where it was left, if that is remembered. A book whose text flows that was left at another
+    /// size of the text is laid out to find its place (`exact`, the book that is opened now); a book read ahead keeps the page it had.
+    fn first_page(&mut self, index: usize, exact: bool) -> usize {
         let spread = self.spread_for(index);
-        self.book_of(index).map_or(0, |b| spread.start_of(b.page))
+        let path = self.files.get(index).cloned();
+        self.book_of(index).map_or(0, |b| match &path {
+            Some(path) if exact => spread.start_of(page_of(path, b)),
+            _ => spread.start_of(b.page),
+        })
     }
 
     /// Writes down where the book on the screen is (a file of many pages only): the page, how its pages are put together, the zoom
@@ -1283,6 +1356,10 @@ impl Viewer {
             kept: self.kept,
             file_turn: self.file_turns.get(&path).copied().unwrap_or(0),
             turns,
+            place: text_flows(&path)
+                .then(|| place_of(&path, self.page).ok().flatten())
+                .flatten()
+                .map(|place| (place, peekel_core::book::text_size())),
         };
         self.state.put(&state::key_of(&path), book);
         self.state.save();
@@ -1312,7 +1389,7 @@ impl Viewer {
             plain(&path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default())
         ))?;
         self.remember();
-        let page = self.first_page(index);
+        let page = self.first_page(index, true);
         self.pending = self.take_read(index, page);
         Ok(())
     }
@@ -1653,6 +1730,19 @@ impl Viewer {
             }
             Action::NextHit => self.go_to_hit(true)?,
             Action::PrevHit => self.go_to_hit(false)?,
+            Action::TextLarger | Action::TextSmaller if self.show_info && !self.card => {
+                self.message = Some("properties: i goes back to the picture".to_string());
+            }
+            Action::TextLarger | Action::TextSmaller => {
+                let step = peekel_core::book::TEXT_SIZE_STEP;
+                let now = self.settings.text_size;
+                let wanted = if action == Action::TextLarger {
+                    now + step
+                } else {
+                    now.saturating_sub(step)
+                };
+                self.set_text_size(wanted)?;
+            }
             Action::SpreadPages | Action::SpreadShift | Action::EqualHeight if self.card || self.show_info => {
                 self.message = Some(if self.card {
                     "a card has no pages to put side by side".to_string()
@@ -1872,10 +1962,15 @@ impl Viewer {
                 // said on the line at the bottom at once, and kept as the message: the picture is not drawn again for a word (that takes
                 // much longer than the reading did), and when it is drawn later (a move that was drawn roughly is drawn well a moment after) the line has
                 // the message still
-                let said = if peekel_core::djvu::is_djvu(&path) || peekel_core::pdf::is_pdf(&path) {
+                let said = if peekel_core::djvu::is_djvu(&path)
+                    || peekel_core::pdf::is_pdf(&path)
+                    || peekel_core::fb2::is_fb2(&path)
+                    || peekel_core::epub::is_epub(&path)
+                    || peekel_core::html::is_html(&path)
+                {
                     "this book has no contents"
                 } else {
-                    "only DjVu books and PDF files have a contents"
+                    "only DjVu, PDF, FB2 and EPUB books have a contents"
                 };
                 self.message = Some(said.to_string());
                 self.quiet_message = true;
@@ -1969,6 +2064,10 @@ impl Viewer {
                 }
                 .to_string(),
             ),
+            (
+                "The text of FB2, EPUB and HTML (f, F)".to_string(),
+                format!("{} %", self.settings.text_size),
+            ),
         ]
     }
 
@@ -2013,6 +2112,12 @@ impl Viewer {
                 self.behind = None;
                 self.toc_choice = None;
                 self.turned += 1;
+            }
+            5 => {
+                let step = peekel_core::book::TEXT_SIZE_STEP;
+                let now = self.settings.text_size;
+                self.info = None;
+                return self.set_text_size(if forward { now + step } else { now.saturating_sub(step) });
             }
             _ => return Ok(()),
         }
@@ -2523,7 +2628,7 @@ impl Viewer {
                         } else if peekel_core::pdf::is_pdf(&path) {
                             "this PDF has no text to search (a scan)"
                         } else {
-                            "only PDF and DjVu books can be searched"
+                            "only PDF, DjVu, FB2, EPUB and HTML can be searched"
                         }
                         .to_string(),
                     );
@@ -2594,6 +2699,46 @@ impl Viewer {
                 Ok(())
             }
         }
+    }
+
+    /// Sets the size of the text of the books whose text flows (in per cent, kept within `TEXT_SIZES`) and writes it in the settings; the
+    /// book on the screen, if it is one, is laid out again and opened where the reader was in its text. Any other file is not touched:
+    /// the size holds for the next such book.
+    fn set_text_size(&mut self, percent: u32) -> Result<(), String> {
+        let (low, high) = peekel_core::book::TEXT_SIZES;
+        let percent = percent.clamp(low, high);
+        if percent == self.settings.text_size {
+            self.message = Some(format!(
+                "the text is at its {} ({percent} %)",
+                if percent == high { "largest" } else { "smallest" }
+            ));
+            return Ok(());
+        }
+        let path = self.files.get(self.index).cloned();
+        let book = path.filter(|p| !self.card && self.pages > 0 && text_flows(p));
+        // the place is taken at the old size, from the book laid out now
+        let place = book.as_ref().and_then(|p| place_of(p, self.page).ok().flatten());
+        peekel_core::book::set_text_size(percent);
+        self.settings.text_size = percent;
+        self.settings.save();
+        self.message = Some(format!("the text of books at {percent} %"));
+        // what was read ahead or kept was laid out at the old size, and so were the pages of a search
+        self.preload = None;
+        self.behind = None;
+        self.texts = None;
+        self.find = None;
+        self.toc_choice = None;
+        self.turned += 1;
+        let Some(path) = book else {
+            return Ok(());
+        };
+        self.say(&format!("laying the book out at {percent} %…"))?;
+        let page = place
+            .and_then(|place| page_at(&path, place).ok().flatten())
+            .unwrap_or(self.page);
+        self.asked = Instant::now();
+        self.pending = self.take_read(self.index, self.spread.start_of(page));
+        Ok(())
     }
 
     /// Sets the spread up another way and reads the pages again, the same first page (or the first of its pair) kept.
@@ -2689,9 +2834,11 @@ fn show(path: &Path, options: Options) -> Result<Report, String> {
         cover_alone: book.cover_alone,
     });
     let spread = settings.spread(own);
+    // a book whose text flows is laid out at the size of text chosen; left at another size, its page is found again from the place
+    peekel_core::book::set_text_size(settings.text_size);
     let (start, quarters) = match &remembered {
         Some(book) => {
-            let start = spread.start_of(book.page);
+            let start = spread.start_of(page_of(path, book));
             let turn_of = |page: usize| {
                 let own = book.turns.iter().find(|(p, _)| *p == page).map_or(0, |(_, q)| *q);
                 (own + book.file_turn).rem_euclid(4)

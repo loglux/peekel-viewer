@@ -37,6 +37,9 @@ pub struct Settings {
     /// Folders of the user's own fonts as written (a list the way `PATH` is: `;` on Windows, `:` elsewhere); empty when none. Edited by
     /// hand, not on the screen of `s`.
     pub fonts: String,
+    /// The size of the text of a book whose text flows (FB2, EPUB), in per cent of its own (`peekel_core::book::TEXT_SIZES`); one for
+    /// every book.
+    pub text_size: u32,
     /// Where it is kept (nowhere: nothing is read or written).
     file: Option<PathBuf>,
 }
@@ -51,6 +54,7 @@ impl Settings {
             cover_alone: true,
             browse: Listing::Pictures,
             fonts: String::new(),
+            text_size: 100,
             file: None,
         }
     }
@@ -119,6 +123,18 @@ impl Settings {
                     "books" => self.browse = Listing::Books,
                     _ => {}
                 },
+                "text-size" => {
+                    let (low, high) = peekel_core::book::TEXT_SIZES;
+                    if let Some(n) = value
+                        .trim_end_matches('%')
+                        .trim()
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|n| (low..=high).contains(n))
+                    {
+                        self.text_size = n;
+                    }
+                }
                 // a path keeps its capitals
                 "fonts" => self.fonts = raw.to_string(),
                 _ => {}
@@ -145,8 +161,11 @@ impl Settings {
              cover-alone = {}\n\
              \n\
              # Which files of the folder Space and Backspace go through: every (a file that is no picture is shown as a card: its kind, size,\n\
-             # dates and what is inside), pictures (the pictures and documents the viewer reads), books (PDF and DjVu only).\n\
+             # dates and what is inside), pictures (the pictures and documents the viewer reads), books (PDF, DjVu, FB2 and EPUB only).\n\
              browse = {}\n\
+             \n\
+             # The size of the text of FB2 and EPUB books and HTML pages, in per cent (70 to 200; f and F change it): the book is laid out again.\n\
+             text-size = {}\n\
              \n\
              # Folders of your own fonts (the originals copied from your Windows or Office), looked in first for the text of Word, Excel and\n\
              # PowerPoint pages and of cards; several folders are written the way PATH is (; on Windows, : elsewhere). Edit this file: it is not on the screen.\n\
@@ -163,6 +182,7 @@ impl Settings {
                 Listing::Pictures => "pictures",
                 Listing::Books => "books",
             },
+            self.text_size,
             self.fonts,
         )
     }
@@ -235,6 +255,19 @@ mod tests {
         assert_eq!(again.browse, Listing::Books);
         again.parse("browse = every\nbrowse = nonsense\n");
         assert_eq!(again.browse, Listing::Every, "a word not understood changes nothing");
+    }
+
+    #[test]
+    fn the_size_of_the_text_is_its_own_by_default_kept_within_its_range_and_survives_a_save() {
+        let mut s = Settings::none();
+        assert_eq!(s.text_size, 100);
+        s.parse("text-size = 130 %\n");
+        assert_eq!(s.text_size, 130);
+        s.parse("text-size = 500\ntext-size = big\ntext-size = 10\n");
+        assert_eq!(s.text_size, 130, "out of the range or not a number: nothing changes");
+        let mut again = Settings::none();
+        again.parse(&s.text());
+        assert_eq!(again.text_size, 130);
     }
 
     #[test]

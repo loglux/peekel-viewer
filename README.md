@@ -1,8 +1,8 @@
 # Peekel viewer
 
 **A file viewer for the terminal that also reads books.** `peekel` shows a picture, an SVG, the start of a Word, Excel, PowerPoint or
-OpenDocument file, and a card for any other file; and it reads PDF and DjVu books page by page, with their contents, a search in the
-text and the place you stopped at kept. It draws with Sixel graphics in the terminal's own cells, so it works in Windows Terminal, on
+OpenDocument file, and a card for any other file; and it reads PDF, DjVu, FB2 and EPUB books (and HTML pages) page by page, with their
+contents, a search in the text and the place you stopped at kept. It draws with Sixel graphics in the terminal's own cells, so it works in Windows Terminal, on
 Linux and over SSH, and it can be the F3 viewer of Far Manager or Midnight Commander.
 
 ![The Peekel viewer in a terminal: a picture](docs/images/viewer-picture.png)
@@ -13,7 +13,9 @@ Linux and over SSH, and it can be the F3 viewer of Far Manager or Midnight Comma
 - **More than pictures.** The start of a document, and on request a card for anything else: a font in its own letters, a program's
   version and icon, what is inside an archive.
 - **Books too.** Two or three pages side by side, the contents of the book (`c`), a search in the text (`/`), a page scanned on its
-  side turned with a key, and every book opens where you left it.
+  side turned with a key, and every book opens where you left it. FB2 and EPUB are laid out into pages by the viewer itself,
+  justified, and the size of their text is yours to choose. Russian words are also hyphenated at the end of a line; text in other
+  languages is set without hyphenation.
 - **Quick:** the next and the previous page or file are made ready while you look at this one.
 - **Damaged files are safe:** every reader has limits on size and depth; a broken file gives a message, not a crash.
 - Written in Rust. Open source, MIT or Apache-2.0.
@@ -47,6 +49,8 @@ The screens are drawn from what the program wrote to a terminal of 130 x 36 cell
 | OpenDocument (.odt, .ods, .odp) | the start, the top of the sheet, the first slide |
 | PDF (not password-protected) | the pages; `c` its bookmarks, `/` a search in its text (a scan has no text) |
 | DjVu (scanned books) | the pages; `c` its bookmarks, `/` a search in a book with a text layer |
+| FB2 (also `.fb2.zip`), EPUB (without DRM) | the book laid out into pages; `c` its contents, `/` a search, `f` `F` a larger, smaller text |
+| HTML (.html, .htm, .xhtml) saved on the disk | the page laid out as a book, its headings the contents; no styles or scripts |
 | Fonts, programs (exe, dll), ZIP, gzip, anything else | a card with the kind, size, dates and what is inside (when the settings say so) |
 
 EXIF orientation is honoured and a colour profile is converted to sRGB. **Documents are previews, not copies**: words are wrapped by a
@@ -65,8 +69,23 @@ xterm. The program asks the terminal and says so when it does not show Sixel.
 
 Take the archive for your system from the [latest release](../../releases/latest) and check it against its `.sha256` file.
 
-- **Windows:** `Peekel-viewer-<version>-windows-x64.zip`. Unpack `peekel.exe` anywhere, for example into a folder on your `PATH`.
-- **Linux:** `Peekel-viewer-<version>-linux-x86_64.tar.gz`. Unpack it and keep `peekel` and its `fonts` folder together.
+- **Windows:** `Peekel-viewer-<version>-windows-x64.zip`.
+- **Linux:** `Peekel-viewer-<version>-linux-x86_64.tar.gz`.
+
+Unpack it, open a terminal in that folder and run `.\peekel.exe --install` (Windows) or `./peekel --install` (Linux). It asks before
+each step:
+
+- copies itself to `%LOCALAPPDATA%\Programs\peekel` and puts that folder on your `PATH` (Windows), or to `~/.local/bin` with its
+  free fonts in `~/.local/share/peekel/fonts` (Linux);
+- sets F3 of **Far Manager** and F3 and Enter of **Midnight Commander** to open the files it reads, if it finds them (below). Far
+  must be closed for this; a Midnight Commander that is open picks it up when it is started again. Neither is needed: without them
+  this step is passed over.
+
+**A new version** is installed the same way: unpack it and run its `--install`. It replaces the program and brings the file
+managers' list of files up to date (a new version may read more of them); your settings and the places in your books are kept.
+
+`peekel --uninstall` takes all of it away again. Without installing, `peekel` also runs from where it was unpacked (on Linux keep its
+`fonts` folder beside it).
 
 From source: install Rust (the version is in `rust-toolchain.toml`) and run `cargo build --release -p peekel`.
 
@@ -106,12 +125,13 @@ Space and Backspace go to the next and the previous file of the folder. The line
 | `/`, `n`, `N` | find a word; the next and the previous page that has it (the word is marked) |
 | `d`, `o`, `e` | pages side by side (2, 3, 1); the first page alone or with the second; pages equally high or not |
 | `r`, `R` | turn the page a quarter clockwise, back |
+| `f`, `F` | a larger, a smaller text in FB2, EPUB and HTML (70 to 200 %; the book is laid out again, you stay at your place) |
 
 The keys work with any keyboard layout in Windows Terminal, and with the Russian layout in any terminal.
 
 **The settings** (`s`, or the file `settings` beside the state below): pages side by side for each book or one choice for all, the
-defaults of a spread, and **which files Space goes through**: pictures and documents (the default), books only (PDF and DjVu, for
-reading), or every file (the others shown as cards).
+defaults of a spread, the size of the text of FB2, EPUB and HTML, and **which files Space goes through**: pictures and documents (the
+default), books only (PDF, DjVu, FB2 and EPUB, for reading), or every file (the others shown as cards).
 
 Options: `--cards` goes through every file for one run, `--no-state` neither keeps nor uses the place in each book, `--no-status`
 leaves out the line at the bottom, `--any-key` closes on any key, `--force` draws even when the terminal does not say it shows Sixel
@@ -122,18 +142,32 @@ leaves out the line at the bottom, `--any-key` closes on any key, `--force` draw
 
 ## F3 in Far Manager and Midnight Commander
 
-- **Far Manager:** F9 › Commands › File associations, add a mask (for example `*.pdf,*.djvu,*.jpg,*.png`) and set the command for F3 to
-  `C:\path\to\peekel.exe "!.!"`. For the quick view of Far's panel (Ctrl+Q) there is a plugin of its own,
-  [Peekel for Far Manager](https://github.com/loglux/peekel).
-- **Midnight Commander:** in `~/.config/mc/mc.ext.ini` (the first lines are required):
+`peekel --setup far` and `peekel --setup mc` do it (and `--install` offers them); run them again after an update, when a new version
+reads more files. What they change is backed up first.
+
+- **Far Manager** (close it first): its own file association, put first, with F3 running `peekel.exe "!.!"`; an association of yours
+  that only runs `peekel.exe` is replaced, any other is kept.
+- **Midnight Commander:** a section `[Peekel]` first in `~/.config/mc/mc.ext.ini`. mc reads either that file or the system's
+  (`/etc/mc/mc.ext.ini`), not both, so when you have none it is made as a copy of the system's, as mc's own "Edit extension file"
+  does; mc takes the first section that matches, so F3 and Enter both open these files in `peekel`.
+
+By hand: `peekel --masks far` and `peekel --masks mc` print what is below, for the files this version reads.
+
+- **Far Manager:** F9 › Commands › File associations, add this mask and set the command for F3 to `C:\path\to\peekel.exe "!.!"`:
+
+  ```
+  *.png,*.jpg,*.jpeg,*.jfif,*.gif,*.bmp,*.webp,*.tif,*.tiff,*.dds,*.nef,*.nrw,*.cr2,*.arw,*.sr2,*.srf,*.dng,*.orf,*.pef,*.3fr,*.erf,*.mef,*.kdc,*.dcr,*.rw2,*.jxl,*.svg,*.svgz,*.pdf,*.djvu,*.djv,*.fb2,*.fb2.zip,*.fbz,*.epub,*.html,*.htm,*.xhtml,*.docx,*.odt,*.ods,*.odp,*.pptx,*.xlsx
+  ```
+
+  For the quick view of Far's panel (Ctrl+Q) there is a plugin of its own, [Peekel for Far Manager](https://github.com/loglux/peekel).
+- **Midnight Commander:** first in `~/.config/mc/mc.ext.ini`, after its `[mc.ext.ini]` and `Version` (if you have no such file, copy
+  `/etc/mc/mc.ext.ini` there first, or mc loses its other associations):
 
   ```ini
-  [mc.ext.ini]
-  Version=4.0
-
   [Peekel]
-  Regex=\\.(pdf|djvu|png|jpe?g|gif|bmp|webp|tiff?|svg|docx|pptx|xlsx)$
+  Regex=\\.(png|jpg|jpeg|jfif|gif|bmp|webp|tif|tiff|dds|nef|nrw|cr2|arw|sr2|srf|dng|orf|pef|3fr|erf|mef|kdc|dcr|rw2|jxl|svg|svgz|pdf|djvu|djv|fb2|fb2\\.zip|fbz|epub|html|htm|xhtml|docx|odt|ods|odp|pptx|xlsx)$
   RegexIgnoreCase=true
+  Open=peekel %f
   View=peekel %f
   ```
 

@@ -51,6 +51,9 @@ pub enum Action {
     SpreadShift,
     /// The pages of a spread made equally high, or each in its own size.
     EqualHeight,
+    /// The text of a book whose text flows (FB2, EPUB) made larger (`f`) or smaller (`F`), the book laid out again.
+    TextLarger,
+    TextSmaller,
     /// The list of the keys, in place of the picture until any key is pressed.
     Help,
 }
@@ -177,6 +180,8 @@ pub fn action(key: &[u8]) -> Option<Action> {
         b"d" | b"D" => SpreadPages,
         b"o" | b"O" => SpreadShift,
         b"e" | b"E" => EqualHeight,
+        b"f" => TextLarger,
+        b"F" => TextSmaller,
         // F1 is `ESC O P` in xterm and most terminals, `ESC [ 11 ~` in some
         b"?" | b"\x1bOP" | b"\x1b[11~" => Help,
         b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" => BookStart,
@@ -266,7 +271,7 @@ mod tests {
 
     #[test]
     fn other_keys_mean_nothing() {
-        for key in [&b"x"[..], b"\x1b[2~", b"\x1bx", b"\xd0\xb9", b"F"] {
+        for key in [&b"x"[..], b"\x1b[2~", b"\x1bx", b"\xd0\xb9", b"X"] {
             assert_eq!(action(key), None, "{key:?}");
         }
     }
@@ -371,5 +376,14 @@ mod tests {
         assert_eq!(action(b"d"), Some(Action::SpreadPages));
         assert_eq!(action(b"o"), Some(Action::SpreadShift));
         assert_eq!(action(b"e"), Some(Action::EqualHeight));
+    }
+
+    #[test]
+    fn f_makes_the_text_of_a_book_larger_and_capital_f_smaller_in_either_layout() {
+        assert_eq!(action(b"f"), Some(Action::TextLarger));
+        assert_eq!(action(b"F"), Some(Action::TextSmaller));
+        // the key of f has а on it in the Russian layout
+        assert_eq!(latin_key('а'), Some('f'));
+        assert_eq!(latin_key('А'), Some('F'));
     }
 }
