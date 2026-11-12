@@ -47,11 +47,13 @@ keys:
   arrows, h j k l   move the picture     Space, Backspace   the next, the previous file     g, G   the first, the last file
   Home, End         the beginning, the end of a book (in other files: the first, the last file)
   Page Down, Up     the next, the previous spread of a PDF, DjVu, FB2 or EPUB book (two pages side by side; in other files: the next, the previous file)
+  p                 go to a page of the book by its number (Enter goes, Esc gives it up)
   d                 pages side by side: 2, 3, 1     o   shift the pairs (the first page alone or with the second)     e   equal height or not
   i                 the properties of the file (a photograph's EXIF, a document's author and pages); again: back
   Shift, Ctrl+arrows   a bigger step: half a window, a whole one (H J K L: half)
   mouse             wheel: zoom; drag: move the picture; a click in the left or right fifth: the previous or the next file
   y                 copy the file's path to the terminal's clipboard (OSC 52; some terminals refuse)
+  m                 copy the magnet link of a .torrent to the clipboard (the same way)
   ?, F1             this list of keys (any key takes it away)
   Esc, q, Enter     close
 
@@ -127,6 +129,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ),
     ("g, G", "the first, the last file of the folder"),
     ("Page Down, Page Up", "the next, the previous spread of a book"),
+    ("p", "go to a page of the book by its number"),
     ("mouse wheel", "zoom in, out"),
     ("drag", "move the picture"),
     ("click at the left, right edge", "the previous, the next file"),
@@ -151,6 +154,7 @@ const HELP_ROWS: &[(&str, &str)] = &[
         "turn the page a quarter clockwise, the other way (for a page scanned on its side)",
     ),
     ("y", "copy the file's path to the clipboard"),
+    ("m", "copy the magnet link of a .torrent to the clipboard"),
     ("?, F1", "this list"),
     ("Esc, q, Enter", "close"),
 ];
@@ -282,6 +286,8 @@ fn chapter_at(items: &[peekel_core::djvu::ContentsItem], page: usize) -> usize {
 }
 /// The most characters of a word to look for.
 const MAX_NEEDLE: usize = 120;
+/// The most digits of a page's number (`p`).
+const MAX_PAGE_DIGITS: usize = 7;
 
 /// A drag with the left button.
 #[derive(Debug, Clone, Copy)]
@@ -684,8 +690,10 @@ struct Viewer {
     /// The settings: the defaults, and whether the choices are each book's own or one for all.
     settings: Settings,
     adopted: std::collections::HashSet<PathBuf>,
-    /// The word being typed after `/` (None: no word is being asked for).
+    /// The word being typed after `/`, or the number after `p` (None: nothing is being asked for).
     prompt: Option<String>,
+    /// Whether the prompt asks for a page's number (`p`), not a word to find (`/`).
+    asking_page: bool,
     /// The last search of the book on the screen.
     find: Option<Find>,
     /// The contents of the book on the screen, while the list of them is shown (it takes the keys until Enter or Esc).
@@ -776,12 +784,12 @@ fn load(path: &Path, page: usize, cards: bool) -> Result<Loaded, DecodeError> {
             card: false,
             note: None,
         }),
-        Err(e) if cards && std::fs::metadata(path).is_ok() => Ok(Loaded {
+        Err(e) if (cards || files::card_only(path)) && std::fs::metadata(path).is_ok() => Ok(Loaded {
             image: Image::blank(),
             shown: 1,
             pages: 1,
             card: true,
-            note: files::is_picture(path).then(|| e.to_string()),
+            note: (files::is_picture(path) && !files::card_only(path)).then(|| e.to_string()),
         }),
         Err(_) if !files::is_picture(path) && std::fs::metadata(path).is_ok() => Err(DecodeError::NotAPicture),
         Err(e) => Err(e),
@@ -1637,6 +1645,21 @@ impl Viewer {
                     self.message = Some("path sent to the clipboard (if the terminal allows it)".to_string());
                 }
             }
+            Action::CopyMagnet => {
+                let link = self
+                    .files
+                    .get(self.index)
+                    .filter(|p| peekel_core::torrent::is_torrent(p))
+                    .and_then(|p| peekel_core::torrent::magnet_of(p));
+                self.message = Some(match link {
+                    Some(link) => {
+                        let sequence = peekel_term::clipboard::copy_sequence(&link);
+                        write_out(&[&sequence]).map_err(|e| write_failed(&e))?;
+                        "magnet link sent to the clipboard (if the terminal allows it)".to_string()
+                    }
+                    None => "m copies the magnet link of a .torrent".to_string(),
+                });
+            }
             Action::Help => {
                 self.help = true;
                 self.info = None;
@@ -1723,7 +1746,19 @@ impl Viewer {
             Action::Contents => self.open_contents()?,
             Action::Search => {
                 self.prompt = Some(String::new());
+                self.asking_page = false;
                 self.message = Some("/".to_string());
+            }
+            Action::GoToPage if self.show_info && !self.card => {
+                self.message = Some("properties: i goes back to the picture".to_string());
+            }
+            Action::GoToPage if self.card || self.pages < 2 => {
+                self.message = Some("this file has one page".to_string());
+            }
+            Action::GoToPage => {
+                self.prompt = Some(String::new());
+                self.asking_page = true;
+                self.message = Some(format!("page (1-{}): ", self.pages));
             }
             Action::NextHit | Action::PrevHit if self.find.is_none() => {
                 self.message = Some("no search yet: / asks for a word".to_string());
@@ -1877,8 +1912,8 @@ impl Viewer {
         Ok(())
     }
 
-    /// A key while a word is being typed after `/`: a letter is added, Backspace takes one off, Enter looks for the word, Esc leaves it.
-    /// Whether the screen has to be drawn again.
+    /// A key while a word is being typed after `/` (or a number after `p`): a letter is added, Backspace takes one off, Enter looks for
+    /// the word (or goes to the page), Esc leaves it. Whether the screen has to be drawn again.
     fn type_key(&mut self, key: &[u8]) -> Result<bool, String> {
         let Some(word) = self.prompt.as_mut() else {
             return Ok(false);
@@ -1889,9 +1924,18 @@ impl Viewer {
                 self.message = None;
             }
             b"\r" | b"\n" => {
-                let needle = self.prompt.take().unwrap_or_default();
+                let typed = self.prompt.take().unwrap_or_default();
                 self.message = None;
-                self.search(&needle)?;
+                if self.asking_page {
+                    if let Some(page) = page_of_number(&typed, self.pages) {
+                        let start = self.spread.start_of(page);
+                        if self.pending.is_none() && start != self.page {
+                            self.go_page(start)?;
+                        }
+                    }
+                } else {
+                    self.search(&typed)?;
+                }
             }
             b"\x7f" | b"\x08" => {
                 word.pop();
@@ -1899,10 +1943,11 @@ impl Viewer {
             }
             _ => {
                 // `key` is a whole character, as the layout made it (see `KeyDecoder`); an escape sequence (an arrow) has control
-                // characters in it and is not a letter
+                // characters in it and is not a letter. A page's number takes digits only.
                 if let Ok(letters) = std::str::from_utf8(key)
                     && !letters.chars().any(char::is_control)
-                    && word.chars().count() < MAX_NEEDLE
+                    && (!self.asking_page || letters.chars().all(|c| c.is_ascii_digit()))
+                    && word.chars().count() < if self.asking_page { MAX_PAGE_DIGITS } else { MAX_NEEDLE }
                 {
                     word.push_str(letters);
                 }
@@ -1915,7 +1960,12 @@ impl Viewer {
     /// Writes the word that is being typed on the line at the bottom, and only there: the picture is not drawn again for each letter.
     /// (The picture is drawn when the word is entered or given up.)
     fn show_prompt(&mut self) -> Result<bool, String> {
-        let line = format!("/{}", self.prompt.as_deref().unwrap_or_default());
+        let typed = self.prompt.as_deref().unwrap_or_default();
+        let line = if self.asking_page {
+            format!("page (1-{}): {typed}", self.pages)
+        } else {
+            format!("/{typed}")
+        };
         self.message = Some(line.clone());
         self.say(&line)?;
         Ok(false)
@@ -2914,6 +2964,7 @@ fn show(path: &Path, options: Options) -> Result<Report, String> {
         settings,
         adopted: std::collections::HashSet::new(),
         prompt: None,
+        asking_page: false,
         find: None,
         toc: None,
         menu: None,
@@ -3089,6 +3140,13 @@ fn show(path: &Path, options: Options) -> Result<Report, String> {
     }
 }
 
+/// The page (from 0) that the number typed after `p` names, in a file of `pages` pages: as the line at the bottom counts them (from 1);
+/// past the last page, the last. None for nothing typed or no number.
+fn page_of_number(typed: &str, pages: usize) -> Option<usize> {
+    let number: usize = typed.trim().parse().ok()?;
+    (pages > 0).then(|| number.clamp(1, pages) - 1)
+}
+
 /// What to read ahead of the key, as (file, page): on page `page` of `pages` of the file `index` of `count`, moving `forward` or
 /// back. A file of many pages has its next page (or the one before), until its end is reached; then, and for a file of one page, the
 /// neighbouring file's first page. None when there is nothing else to read.
@@ -3117,7 +3175,19 @@ fn ahead(index: usize, count: usize, page: usize, pages: usize, forward: bool) -
 #[cfg(test)]
 #[allow(clippy::expect_used)] // a test that cannot make its file should stop at once
 mod tests {
-    use super::{DecodeError, ahead, chapter_at, load, plain};
+    use super::{DecodeError, ahead, chapter_at, load, page_of_number, plain};
+
+    #[test]
+    fn the_number_typed_after_p_is_a_page_counted_from_one_and_kept_in_the_book() {
+        assert_eq!(page_of_number("1", 300), Some(0));
+        assert_eq!(page_of_number("250", 300), Some(249));
+        assert_eq!(page_of_number(" 300 ", 300), Some(299));
+        assert_eq!(page_of_number("9999999", 300), Some(299), "past the end: the last page");
+        assert_eq!(page_of_number("0", 300), Some(0));
+        assert_eq!(page_of_number("", 300), None);
+        assert_eq!(page_of_number("12a", 300), None);
+        assert_eq!(page_of_number("5", 0), None);
+    }
 
     /// A file of its own in the system's temporary folder, removed by the caller.
     fn file_with(name: &str, content: &[u8]) -> std::path::PathBuf {

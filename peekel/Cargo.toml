@@ -2,7 +2,7 @@
 name = "peekel"
 description = "Read books and look into any file in the terminal, drawn as Sixel graphics"
 # the viewer has versions of its own, from 0.1.0 (its own public repository, peekel-viewer); the workspace's version is the plugin's
-version = "0.2.0"
+version = "0.3.0"
 authors.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ publish.workspace = true
 
 [dependencies]
 peekel-core = { path = "../core" }
-peekel-term = { version = "0.7.0", path = "../term" }
+peekel-term = { version = "0.8.0", path = "../term" }
 
 [lints]
 workspace = true

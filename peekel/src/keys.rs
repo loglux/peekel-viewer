@@ -31,6 +31,8 @@ pub enum Action {
     Info,
     /// The path of the file, put on the terminal's clipboard.
     CopyPath,
+    /// The magnet link of a `.torrent` copied to the clipboard (OSC 52).
+    CopyMagnet,
     /// The page turned a quarter clockwise (`r`) or counter-clockwise (`R`): for a page that was scanned on its side.
     TurnRight,
     TurnLeft,
@@ -54,6 +56,8 @@ pub enum Action {
     /// The text of a book whose text flows (FB2, EPUB) made larger (`f`) or smaller (`F`), the book laid out again.
     TextLarger,
     TextSmaller,
+    /// A page of the book by its number, typed on the line at the bottom (`p`).
+    GoToPage,
     /// The list of the keys, in place of the picture until any key is pressed.
     Help,
 }
@@ -167,6 +171,7 @@ pub fn action(key: &[u8]) -> Option<Action> {
         b"\x1b[5~" => PageUp,
         b"i" | b"I" => Info,
         b"y" | b"Y" => CopyPath,
+        b"m" | b"M" => CopyMagnet,
         b"r" => TurnRight,
         b"R" => TurnLeft,
         b"a" => TurnAllRight,
@@ -182,6 +187,7 @@ pub fn action(key: &[u8]) -> Option<Action> {
         b"e" | b"E" => EqualHeight,
         b"f" => TextLarger,
         b"F" => TextSmaller,
+        b"p" | b"P" => GoToPage,
         // F1 is `ESC O P` in xterm and most terminals, `ESC [ 11 ~` in some
         b"?" | b"\x1bOP" | b"\x1b[11~" => Help,
         b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" => BookStart,
@@ -260,6 +266,7 @@ mod tests {
     #[test]
     fn y_copies_the_path() {
         assert_eq!(action(b"y"), Some(Action::CopyPath));
+        assert_eq!(action(b"m"), Some(Action::CopyMagnet));
     }
 
     #[test]
@@ -385,5 +392,13 @@ mod tests {
         // the key of f has а on it in the Russian layout
         assert_eq!(latin_key('а'), Some('f'));
         assert_eq!(latin_key('А'), Some('F'));
+    }
+
+    #[test]
+    fn p_asks_for_a_page_in_either_layout() {
+        assert_eq!(action(b"p"), Some(Action::GoToPage));
+        assert_eq!(action(b"P"), Some(Action::GoToPage));
+        // the key of p has з on it in the Russian layout
+        assert_eq!(latin_key('з'), Some('p'));
     }
 }

@@ -5,19 +5,32 @@ use std::path::{Path, PathBuf};
 /// What `core::decode` reads (the formats the `image` crate is built with).
 const EXTENSIONS: [&str; 10] = ["png", "jpg", "jpeg", "jfif", "gif", "bmp", "webp", "tif", "tiff", "dds"];
 
-/// Whether the name looks like a picture this program reads.
+/// What is shown as its card always, not only with `--cards`: its card is what there is to see of it.
+const CARDS: [&str; 1] = ["torrent"];
+
+/// Whether the name looks like a picture this program reads (or a file it always shows as a card).
 pub fn is_picture(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
         || peekel_core::decode::is_special(path)
+        || card_only(path)
+}
+
+/// Whether the file is shown as its card always (a `.torrent`): there is no picture to draw, the card is the view of it.
+pub fn card_only(path: &Path) -> bool {
+    peekel_core::torrent::is_torrent(path)
 }
 
 /// The endings of the names this program reads (without the dot, small letters, each once): the plain pictures, then the formats of
-/// `core`'s own.
+/// `core`'s own, then the files shown as cards.
 pub fn endings() -> Vec<&'static str> {
     let mut all: Vec<&'static str> = Vec::new();
-    for ending in EXTENSIONS.into_iter().chain(peekel_core::decode::special_endings()) {
+    for ending in EXTENSIONS
+        .into_iter()
+        .chain(peekel_core::decode::special_endings())
+        .chain(CARDS)
+    {
         if !all.contains(&ending) {
             all.push(ending);
         }
@@ -115,7 +128,7 @@ mod tests {
     fn the_masks_name_every_format_once_and_only_what_is_read() {
         let endings = endings();
         for wanted in [
-            "png", "jpg", "dds", "nef", "svgz", "pdf", "djvu", "fb2.zip", "epub", "htm", "xlsx", "odp",
+            "png", "jpg", "dds", "nef", "svgz", "pdf", "djvu", "fb2.zip", "epub", "htm", "xlsx", "odp", "torrent",
         ] {
             assert!(endings.contains(&wanted), "{wanted}");
         }

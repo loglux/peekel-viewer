@@ -51,6 +51,7 @@ The screens are drawn from what the program wrote to a terminal of 130 x 36 cell
 | DjVu (scanned books) | the pages; `c` its bookmarks, `/` a search in a book with a text layer |
 | FB2 (also `.fb2.zip`), EPUB (without DRM) | the book laid out into pages; `c` its contents, `/` a search, `f` `F` a larger, smaller text |
 | HTML (.html, .htm, .xhtml) saved on the disk | the page laid out as a book, its headings the contents; no styles or scripts |
+| BitTorrent (.torrent) | a card: the name, the size and files, the largest named, who made it and when, the tracker, private or not, the info-hash |
 | Fonts, programs (exe, dll), ZIP, gzip, anything else | a card with the kind, size, dates and what is inside (when the settings say so) |
 
 EXIF orientation is honoured and a colour profile is converted to sRGB. **Documents are previews, not copies**: words are wrapped by a
@@ -111,6 +112,7 @@ Space and Backspace go to the next and the previous file of the folder. The line
 | `g`, `G` | the first, the last file of the folder |
 | `i` | the properties of the file (a photo's EXIF, a document's author and pages) |
 | `y` | copy the file's path to the terminal's clipboard |
+| `m` | copy the magnet link of a `.torrent` to the clipboard |
 | `s` | the settings |
 | `?`, F1 | all the keys |
 | `q`, Esc, Enter | close |
@@ -121,6 +123,7 @@ Space and Backspace go to the next and the previous file of the folder. The line
 |---|---|
 | Page Down, Page Up | the next, the previous spread |
 | Home, End | the beginning, the end of the book |
+| `p` | go to a page by its number (as the line at the bottom counts them) |
 | `c` | the contents; Enter goes to the chapter |
 | `/`, `n`, `N` | find a word; the next and the previous page that has it (the word is marked) |
 | `d`, `o`, `e` | pages side by side (2, 3, 1); the first page alone or with the second; pages equally high or not |
@@ -156,7 +159,7 @@ By hand: `peekel --masks far` and `peekel --masks mc` print what is below, for t
 - **Far Manager:** F9 › Commands › File associations, add this mask and set the command for F3 to `C:\path\to\peekel.exe "!.!"`:
 
   ```
-  *.png,*.jpg,*.jpeg,*.jfif,*.gif,*.bmp,*.webp,*.tif,*.tiff,*.dds,*.nef,*.nrw,*.cr2,*.arw,*.sr2,*.srf,*.dng,*.orf,*.pef,*.3fr,*.erf,*.mef,*.kdc,*.dcr,*.rw2,*.jxl,*.svg,*.svgz,*.pdf,*.djvu,*.djv,*.fb2,*.fb2.zip,*.fbz,*.epub,*.html,*.htm,*.xhtml,*.docx,*.odt,*.ods,*.odp,*.pptx,*.xlsx
+  *.png,*.jpg,*.jpeg,*.jfif,*.gif,*.bmp,*.webp,*.tif,*.tiff,*.dds,*.nef,*.nrw,*.cr2,*.arw,*.sr2,*.srf,*.dng,*.orf,*.pef,*.3fr,*.erf,*.mef,*.kdc,*.dcr,*.rw2,*.jxl,*.svg,*.svgz,*.pdf,*.djvu,*.djv,*.fb2,*.fb2.zip,*.fbz,*.epub,*.html,*.htm,*.xhtml,*.docx,*.odt,*.ods,*.odp,*.pptx,*.xlsx,*.torrent
   ```
 
   For the quick view of Far's panel (Ctrl+Q) there is a plugin of its own, [Peekel for Far Manager](https://github.com/loglux/peekel).
@@ -165,7 +168,7 @@ By hand: `peekel --masks far` and `peekel --masks mc` print what is below, for t
 
   ```ini
   [Peekel]
-  Regex=\\.(png|jpg|jpeg|jfif|gif|bmp|webp|tif|tiff|dds|nef|nrw|cr2|arw|sr2|srf|dng|orf|pef|3fr|erf|mef|kdc|dcr|rw2|jxl|svg|svgz|pdf|djvu|djv|fb2|fb2\\.zip|fbz|epub|html|htm|xhtml|docx|odt|ods|odp|pptx|xlsx)$
+  Regex=\\.(png|jpg|jpeg|jfif|gif|bmp|webp|tif|tiff|dds|nef|nrw|cr2|arw|sr2|srf|dng|orf|pef|3fr|erf|mef|kdc|dcr|rw2|jxl|svg|svgz|pdf|djvu|djv|fb2|fb2\\.zip|fbz|epub|html|htm|xhtml|docx|odt|ods|odp|pptx|xlsx|torrent)$
   RegexIgnoreCase=true
   Open=peekel %f
   View=peekel %f
