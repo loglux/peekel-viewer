@@ -37,10 +37,11 @@ fn plain(text: &str) -> String {
     text.chars().map(|c| if c.is_control() { '?' } else { c }).collect()
 }
 
-const USAGE: &str = "usage: peekel [options] <picture>
+const USAGE: &str = "usage: peekel [options] <file>
 
-Shows a picture, an SVG, a PDF or the start of a Word, PowerPoint or Excel file in a terminal that displays Sixel graphics
-(Windows Terminal 1.22 or later, xterm, mlterm, foot and others), and the other files of its folder.
+Shows a picture, an SVG, the start of a Word, Excel, PowerPoint or OpenDocument file, and on request (--cards) a card for any other file; reads PDF,
+DjVu, FB2 and EPUB books (and HTML pages) page by page. In a terminal that displays Sixel graphics (Windows Terminal 1.22 or
+later, xterm, mlterm, foot and others), with the other files of its folder.
 
 keys:
   + -               zoom in, out         0   the whole picture      1   one pixel to one      w   as wide as the window
@@ -392,8 +393,9 @@ fn main() -> ExitCode {
         };
     }
     let Some(path) = path else {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
+        // nothing to show is no mistake: the same as --help (winget's check runs the program so; docs/internal/winget.md)
+        println!("{USAGE}");
+        return ExitCode::SUCCESS;
     };
     if !(io::stdin().is_terminal() && io::stdout().is_terminal()) {
         eprintln!("peekel: needs a terminal on standard input and output");
