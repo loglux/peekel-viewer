@@ -40,6 +40,8 @@ pub struct Settings {
     /// The size of the text of a book whose text flows (FB2, EPUB), in per cent of its own (`peekel_core::book::TEXT_SIZES`); one for
     /// every book.
     pub text_size: u32,
+    /// The pages of books dark and their text light (`b`; `peekel_core::night`): for every book.
+    pub night: bool,
     /// Where it is kept (nowhere: nothing is read or written).
     file: Option<PathBuf>,
 }
@@ -55,6 +57,7 @@ impl Settings {
             browse: Listing::Pictures,
             fonts: String::new(),
             text_size: 100,
+            night: false,
             file: None,
         }
     }
@@ -135,6 +138,11 @@ impl Settings {
                         self.text_size = n;
                     }
                 }
+                "night" => {
+                    if let Some(v) = yes_no(&value) {
+                        self.night = v;
+                    }
+                }
                 // a path keeps its capitals
                 "fonts" => self.fonts = raw.to_string(),
                 _ => {}
@@ -167,6 +175,9 @@ impl Settings {
              # The size of the text of FB2 and EPUB books and HTML pages, in per cent (70 to 200; f and F change it): the book is laid out again.\n\
              text-size = {}\n\
              \n\
+             # The night look of books (PDF, DjVu, FB2, EPUB, HTML): the pages dark and the text light (yes), or as they are (no); b changes it.\n\
+             night = {}\n\
+             \n\
              # Folders of your own fonts (the originals copied from your Windows or Office), looked in first for the text of Word, Excel and\n\
              # PowerPoint pages and of cards; several folders are written the way PATH is (; on Windows, : elsewhere). Edit this file: it is not on the screen.\n\
              fonts = {}\n",
@@ -183,6 +194,7 @@ impl Settings {
                 Listing::Books => "books",
             },
             self.text_size,
+            yes_no(self.night),
             self.fonts,
         )
     }
@@ -268,6 +280,19 @@ mod tests {
         let mut again = Settings::none();
         again.parse(&s.text());
         assert_eq!(again.text_size, 130);
+    }
+
+    #[test]
+    fn the_night_look_is_off_by_default_and_survives_a_save() {
+        let mut s = Settings::none();
+        assert!(!s.night);
+        s.parse("night = yes\n");
+        assert!(s.night);
+        let mut again = Settings::none();
+        again.parse(&s.text());
+        assert!(again.night);
+        again.parse("night = dusk\n");
+        assert!(again.night, "a word not understood changes nothing");
     }
 
     #[test]

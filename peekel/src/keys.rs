@@ -58,6 +58,8 @@ pub enum Action {
     TextSmaller,
     /// A page of the book by its number, typed on the line at the bottom (`p`).
     GoToPage,
+    /// The night look of books on or off (`b`): the pages dark and the text light.
+    Night,
     /// The list of the keys, in place of the picture until any key is pressed.
     Help,
 }
@@ -188,6 +190,7 @@ pub fn action(key: &[u8]) -> Option<Action> {
         b"f" => TextLarger,
         b"F" => TextSmaller,
         b"p" | b"P" => GoToPage,
+        b"b" | b"B" => Night,
         // F1 is `ESC O P` in xterm and most terminals, `ESC [ 11 ~` in some
         b"?" | b"\x1bOP" | b"\x1b[11~" => Help,
         b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" => BookStart,

@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "peekel"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "peekel-core",
  "peekel-term",
@@ -820,7 +820,7 @@ dependencies = [
 
 [[package]]
 name = "peekel-core"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64",
  "flate2",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "peekel-djvu"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "fax",
  "zune-core",
@@ -847,7 +847,7 @@ dependencies = [
 
 [[package]]
 name = "peekel-term"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "libc",
  "windows-sys",

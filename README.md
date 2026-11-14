@@ -129,11 +129,12 @@ Space and Backspace go to the next and the previous file of the folder. The line
 | `d`, `o`, `e` | pages side by side (2, 3, 1); the first page alone or with the second; pages equally high or not |
 | `r`, `R` | turn the page a quarter clockwise, back |
 | `f`, `F` | a larger, a smaller text in FB2, EPUB and HTML (70 to 200 %; the book is laid out again, you stay at your place) |
+| `b` | night: the pages of every book dark and the text light, for reading in the dark; again: as they are (kept in the settings) |
 
 The keys work with any keyboard layout in Windows Terminal, and with the Russian layout in any terminal.
 
 **The settings** (`s`, or the file `settings` beside the state below): pages side by side for each book or one choice for all, the
-defaults of a spread, the size of the text of FB2, EPUB and HTML, and **which files Space goes through**: pictures and documents (the
+defaults of a spread, the size of the text of FB2, EPUB and HTML, the night look of books, and **which files Space goes through**: pictures and documents (the
 default), books only (PDF, DjVu, FB2 and EPUB, for reading), or every file (the others shown as cards).
 
 Options: `--cards` goes through every file for one run, `--no-state` neither keeps nor uses the place in each book, `--no-status`

@@ -21,7 +21,7 @@ use peekel_core::decode::{DecodeError, decode_page, mark_words, page_at, page_te
 use peekel_core::photo::{Steady, quantize};
 use peekel_core::quantize::Indexed;
 use peekel_core::sixel;
-use peekel_core::view::{Image, Relative, Size, View, ZOOM_STEP, render, side_by_side, turned_rgba};
+use peekel_core::view::{Image, Relative, Size, View, ZOOM_STEP, render, render_sharp, side_by_side, turned_rgba};
 use peekel_term::reply::{Event, Parser};
 use peekel_term::{RawMode, WindowSize, input, window_size};
 
@@ -149,6 +149,10 @@ const HELP_ROWS: &[(&str, &str)] = &[
     (
         "f, F",
         "the text of an FB2 or EPUB book larger, smaller (laid out again)",
+    ),
+    (
+        "b",
+        "night: the pages of books dark and the text light; again: as they are",
     ),
     (
         "r, R",
@@ -557,16 +561,24 @@ struct Canvas {
 }
 
 /// The window's pixels of `image` for `view`, as Sixel, its palette made by `quantizer` (which says too whether the frame is rough).
+/// With `sharp`, a picture drawn from an SVG and shown enlarged has the part shown drawn again from its shapes (`render_sharp`): not for
+/// the quick frames while it is being moved, which take the picture as it is.
 fn picture_frame(
     image: &mut Image,
     view: &View,
     canvas: Canvas,
+    sharp: bool,
     quantizer: impl FnOnce(&[u32], usize) -> (Indexed, bool),
 ) -> Result<Rendered, String> {
     let room = room(canvas.window, canvas.cell);
     let scale = view.scale(image.size(), room);
     let started = Instant::now();
-    let mut frame = render(image, view, room).ok_or_else(|| "the window is too small".to_string())?;
+    let frame = if sharp {
+        render_sharp(image, view, room)
+    } else {
+        render(image, view, room)
+    };
+    let mut frame = frame.ok_or_else(|| "the window is too small".to_string())?;
     // what is clear or half clear is laid over the terminal's own background (Sixel has no half-clear pixel)
     peekel_core::decode::composite_over(&mut frame.picture.argb, canvas.background);
     // a terminal whose real cell is another shape than the one it tells stretches the picture over the real cells: the picture
@@ -807,12 +819,41 @@ fn load_spread(
     quarters: &[i32],
     cards: bool,
     mark: Option<&str>,
+    night: bool,
 ) -> Result<Loaded, DecodeError> {
     let quarter = |i: usize| quarters.get(i).copied().unwrap_or(0);
-    // the words of the search stand marked on the page (a page with none, or a file with no zones, is left as it is)
+    // an SVG is parsed once and kept with its picture, so that a zoom draws the part shown again from its shapes (a turned one is
+    // enlarged as a picture is); one that cannot be read gets its card or its error from `load`
+    if peekel_core::svg::is_svg(path) {
+        if let Ok(drawing) = peekel_core::svg::Drawing::open(path)
+            && let Ok(picture) = drawing.render()
+        {
+            // what the drawing holds that is not drawn is said at the bottom, so that an empty frame is not taken for a fault
+            let note = drawing.skipped().note();
+            let image = match quarter(0).rem_euclid(4) {
+                0 => Image::of_drawing(picture, std::sync::Arc::new(drawing)),
+                q => Image::new(turned_rgba(picture, q)),
+            };
+            return Ok(Loaded {
+                image,
+                shown: 1,
+                pages: 1,
+                card: false,
+                note,
+            });
+        }
+        return load(path, start, cards);
+    }
+    let dark = night && is_book(path);
+    // the words of the search stand marked on the page (a page with none, or a file with no zones, is left as it is), and a book in the
+    // night look is made dark page by page, so that the gap between the pages stays the terminal's own
     let marked = |index: usize, mut image| {
         if let Some(needle) = mark {
             let _ = mark_words(path, index, needle, &mut image);
+        }
+        if dark {
+            // a page that is no paper (a photograph, a cover) is left as it is
+            let _ = peekel_core::night::darken(&mut image);
         }
         image
     };
@@ -861,6 +902,15 @@ fn load_spread(
     })
 }
 
+/// A file the night look is for: a book or a page to read (PDF, DjVu, FB2, EPUB, HTML), not a picture or a card.
+fn is_book(path: &Path) -> bool {
+    peekel_core::pdf::is_pdf(path)
+        || peekel_core::djvu::is_djvu(path)
+        || peekel_core::fb2::is_fb2(path)
+        || peekel_core::epub::is_epub(path)
+        || peekel_core::html::is_html(path)
+}
+
 fn write_out(parts: &[&str]) -> io::Result<()> {
     let mut out = io::stdout().lock();
     for part in parts {
@@ -900,7 +950,7 @@ impl Viewer {
             // the properties are a picture of their own that fits the window; the picture's zoom is not theirs
             if let Some(info) = self.info.as_mut() {
                 let fit = View::new(info.size());
-                return picture_frame(info, &fit, canvas, |argb, width| (quantize(argb, width), false));
+                return picture_frame(info, &fit, canvas, false, |argb, width| (quantize(argb, width), false));
             }
         }
         match coarse {
@@ -908,13 +958,13 @@ impl Viewer {
                 // `steady_frame` borrows the viewer, so the picture is lent out for the frame
                 let mut image = std::mem::replace(&mut self.image, Image::blank());
                 let (view, size) = (self.view, image.size());
-                let made = picture_frame(&mut image, &view, canvas, |argb, width| {
+                let made = picture_frame(&mut image, &view, canvas, false, |argb, width| {
                     self.steady_frame(size, argb, width, dither)
                 });
                 self.image = image;
                 made
             }
-            None => picture_frame(&mut self.image, &self.view, canvas, |argb, width| {
+            None => picture_frame(&mut self.image, &self.view, canvas, true, |argb, width| {
                 (quantize(argb, width), false)
             }),
         }
@@ -1198,6 +1248,7 @@ impl Viewer {
         let cards = self.cards();
         let quarters: Vec<i32> = (0..spread.count).map(|i| self.quarters_for(index, page + i)).collect();
         let mark = self.find.as_ref().map(|f| peekel_core::djvu::normalise(&f.needle));
+        let night = self.settings.night;
         let canvas = ahead.then(|| self.canvas());
         Some(Preload {
             index,
@@ -1206,11 +1257,11 @@ impl Viewer {
             turned: self.turned,
             quick: false,
             handle: std::thread::spawn(move || {
-                let mut loaded = load_spread(&path, page, spread, &quarters, cards, mark.as_deref())?;
+                let mut loaded = load_spread(&path, page, spread, &quarters, cards, mark.as_deref(), night)?;
                 // the frame too, whole and in the middle of the window, as a picture is first shown: the key waits only for the writing
                 let ready = canvas.filter(|_| !loaded.card).and_then(|canvas| {
                     let view = View::new(loaded.image.size());
-                    picture_frame(&mut loaded.image, &view, canvas, |argb, width| {
+                    picture_frame(&mut loaded.image, &view, canvas, true, |argb, width| {
                         (quantize(argb, width), false)
                     })
                     .ok()
@@ -1255,9 +1306,11 @@ impl Viewer {
                         // the frame it was drawn with, while the window is the same; `frame` looks at the view
                         let ready = frame.filter(|f| f.canvas == canvas).or_else(|| {
                             let view = View::new(image.size());
-                            picture_frame(&mut image, &view, canvas, |argb, width| (quantize(argb, width), false))
-                                .ok()
-                                .map(|rendered| Ready { canvas, view, rendered })
+                            picture_frame(&mut image, &view, canvas, true, |argb, width| {
+                                (quantize(argb, width), false)
+                            })
+                            .ok()
+                            .map(|rendered| Ready { canvas, view, rendered })
                         });
                         let loaded = Loaded {
                             image,
@@ -1767,6 +1820,7 @@ impl Viewer {
             }
             Action::NextHit => self.go_to_hit(true)?,
             Action::PrevHit => self.go_to_hit(false)?,
+            Action::Night => self.set_night(!self.settings.night)?,
             Action::TextLarger | Action::TextSmaller if self.show_info && !self.card => {
                 self.message = Some("properties: i goes back to the picture".to_string());
             }
@@ -2120,6 +2174,10 @@ impl Viewer {
                 "The text of FB2, EPUB and HTML (f, F)".to_string(),
                 format!("{} %", self.settings.text_size),
             ),
+            (
+                "Night: the pages of books dark (b)".to_string(),
+                yes_no(self.settings.night),
+            ),
         ]
     }
 
@@ -2171,6 +2229,7 @@ impl Viewer {
                 self.info = None;
                 return self.set_text_size(if forward { now + step } else { now.saturating_sub(step) });
             }
+            6 => return self.set_night(!self.settings.night),
             _ => return Ok(()),
         }
         self.settings.save();
@@ -2802,6 +2861,34 @@ impl Viewer {
         let start = spread.start_of(self.page);
         self.go_page(start)
     }
+
+    /// Turns the night look of books on or off and writes it in the settings; the book on the screen, if it is one, is read again in
+    /// the new look, the same pages kept. A picture or a card is not touched: the look holds for the next book.
+    fn set_night(&mut self, on: bool) -> Result<(), String> {
+        self.settings.night = on;
+        self.settings.save();
+        self.info = None;
+        self.message = Some(
+            if on {
+                "night: the pages of books dark (b turns it off)"
+            } else {
+                "day: the pages of books as they are (b: night)"
+            }
+            .to_string(),
+        );
+        // what was read ahead or kept was made in the other look
+        self.kept = None;
+        self.preload = None;
+        self.behind = None;
+        self.turned += 1;
+        let book = self.files.get(self.index).is_some_and(|p| !self.card && is_book(p));
+        if !book {
+            return Ok(());
+        }
+        self.asked = Instant::now();
+        self.pending = self.take_read(self.index, self.spread.start_of(self.page));
+        Ok(())
+    }
 }
 
 /// The alternate screen for as long as this lives; leaving it (and showing the cursor) also happens when a panic unwinds.
@@ -2913,6 +3000,7 @@ fn show(path: &Path, options: Options) -> Result<Report, String> {
         &quarters,
         listing(&options, &settings) == Listing::Every,
         None,
+        settings.night,
     ) {
         // a file that is no picture is passed over without a word (the cards are an option)
         Err(DecodeError::NotAPicture) => return Ok(Report::default()),
