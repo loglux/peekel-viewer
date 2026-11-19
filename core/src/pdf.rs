@@ -57,7 +57,7 @@ pub fn render_page(path: &Path, page: usize) -> Result<(RgbaImage, usize), Decod
 /// `render_page` with another time to wait.
 pub fn render_page_within(path: &Path, page: usize, timeout: Duration) -> Result<(RgbaImage, usize), DecodeError> {
     if std::fs::metadata(path).map_err(unreadable)?.len() > MAX_BYTES {
-        return Err(DecodeError::TooLarge);
+        return Err(DecodeError::FileTooLarge(MAX_BYTES));
     }
     let data = std::fs::read(path).map_err(unreadable)?;
     on_thread(timeout, move || draw(data, page))?

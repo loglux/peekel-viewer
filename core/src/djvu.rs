@@ -59,7 +59,7 @@ pub fn render_first_page(path: &Path) -> Result<RgbaImage, DecodeError> {
 fn bytes_of(path: &Path) -> Result<Arc<Vec<u8>>, DecodeError> {
     let meta = std::fs::metadata(path).map_err(unreadable)?;
     if meta.len() > MAX_BYTES {
-        return Err(DecodeError::TooLarge);
+        return Err(DecodeError::FileTooLarge(MAX_BYTES));
     }
     let modified = meta.modified().ok();
     if let Ok(kept) = BOOK.lock()
@@ -104,7 +104,55 @@ fn included_dictionary(data: &Arc<Vec<u8>>, name: &[u8], chunk: &[u8]) -> Result
 
 /// Page `page` (counted from 0; a number past the end is the last page) of the file and how many pages it has.
 pub fn render_page(path: &Path, page: usize) -> Result<(RgbaImage, usize), DecodeError> {
-    render_page_within(path, page, None)
+    render_page_within(path, page, Room::Whole)
+}
+
+/// Page `page` of the file (a number past the end is the last) drawn at about `scale` of its own size (0 to 1; the page as it is
+/// shown, turned as its `INFO` says), never smaller than that, and how many pages the file has. Below a half the page is made directly
+/// at the smaller size, which is far less work and memory than the whole page; at a half or more it is the whole page, as
+/// [`render_page`] gives it, and the caller shrinks it.
+pub fn render_page_scaled(path: &Path, page: usize, scale: f64) -> Result<(RgbaImage, usize), DecodeError> {
+    render_page_within(path, page, Room::Scale(scale))
+}
+
+/// The size of page `page` (a number past the end is the last) as [`render_page`] draws it, turned as its `INFO` says, and how many
+/// pages the file has; nothing is drawn.
+pub fn page_size(path: &Path, page: usize) -> Result<((u32, u32), usize), DecodeError> {
+    let data = bytes_of(path)?;
+    // on a thread of its own as the text is: a file made to hurt is an error and not the end of the caller
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .name("djvu size".to_string())
+            .stack_size(crate::guard::STACK)
+            .spawn_scoped(scope, || {
+                let document = Document::parse(&data).map_err(unreadable)?;
+                let count = document.page_count();
+                if count == 0 {
+                    return Err(unreadable("the document has no pages"));
+                }
+                let page = document.page(page.min(count - 1)).map_err(unreadable)?;
+                let (w, h) = (u32::from(page.info.width), u32::from(page.info.height));
+                let shown = match page.info.rotation {
+                    Rotation::Ccw90 | Rotation::Cw90 => (h, w),
+                    Rotation::None | Rotation::Turn180 => (w, h),
+                };
+                Ok((shown, count))
+            })
+            .map_err(unreadable)?
+            .join()
+            .unwrap_or_else(|_| Err(unreadable("the size of the page could not be read")))
+    })
+}
+
+/// How large a page is made.
+#[derive(Debug, Clone, Copy)]
+enum Room {
+    /// At its own size.
+    Whole,
+    /// Not smaller than a box of this many pixels (the page as shown) when the box is at most half the page.
+    Box(usize, usize),
+    /// Not smaller than this part of its own size, when that is at most a half.
+    Scale(f64),
 }
 
 /// The first page of the file at a size that is not smaller than the box `max_width` x `max_height` when the box is at least twice
@@ -117,18 +165,14 @@ pub fn render_page_for_room(
     max_width: usize,
     max_height: usize,
 ) -> Result<RgbaImage, DecodeError> {
-    render_page_within(path, page, Some((max_width, max_height))).map(|(image, _)| image)
+    render_page_within(path, page, Room::Box(max_width, max_height)).map(|(image, _)| image)
 }
 
 pub fn render_within(path: &Path, max_width: usize, max_height: usize) -> Result<RgbaImage, DecodeError> {
-    render_page_within(path, 0, Some((max_width, max_height))).map(|(image, _)| image)
+    render_page_within(path, 0, Room::Box(max_width, max_height)).map(|(image, _)| image)
 }
 
-fn render_page_within(
-    path: &Path,
-    page: usize,
-    room: Option<(usize, usize)>,
-) -> Result<(RgbaImage, usize), DecodeError> {
+fn render_page_within(path: &Path, page: usize, room: Room) -> Result<(RgbaImage, usize), DecodeError> {
     let data = bytes_of(path)?;
     let mut pages = 1;
     let image = draw_on_thread("djvu", "the page could not be drawn", || {
@@ -139,7 +183,7 @@ fn render_page_within(
     Ok((image, pages))
 }
 
-fn draw(data: &Arc<Vec<u8>>, index: usize, room: Option<(usize, usize)>) -> Result<(RgbaImage, usize), DecodeError> {
+fn draw(data: &Arc<Vec<u8>>, index: usize, room: Room) -> Result<(RgbaImage, usize), DecodeError> {
     let document = Document::parse(data).map_err(unreadable)?;
     let count = document.page_count();
     if count == 0 {
@@ -156,8 +200,18 @@ fn draw(data: &Arc<Vec<u8>>, index: usize, room: Option<(usize, usize)>) -> Resu
         None => None,
     };
     let pixmap = match room {
-        Some((width, height)) => page::render_within(&page, dictionary.as_deref(), width, height),
-        None => page::render_with(&page, dictionary.as_deref()),
+        Room::Box(width, height) => page::render_within(&page, dictionary.as_deref(), width, height),
+        Room::Scale(scale) if scale > 0.0 && scale <= 0.5 => {
+            // the box of the page as it is shown, at the scale; `render_within` makes it at that size (rounded as a shrinking is)
+            let (w, h) = (usize::from(page.info.width), usize::from(page.info.height));
+            let (w, h) = match page.info.rotation {
+                Rotation::Ccw90 | Rotation::Cw90 => (h, w),
+                Rotation::None | Rotation::Turn180 => (w, h),
+            };
+            let side = |n: usize| ((n as f64 * scale).ceil() as usize).max(1);
+            page::render_within(&page, dictionary.as_deref(), side(w), side(h))
+        }
+        Room::Whole | Room::Scale(_) => page::render_with(&page, dictionary.as_deref()),
     }
     .map_err(unreadable)?;
     let mut rgba = vec![255u8; pixmap.width * pixmap.height * 4];

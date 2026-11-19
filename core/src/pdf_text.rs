@@ -193,7 +193,7 @@ fn letters_of(page: &Page<'_>, pdf: &Pdf) -> Vec<Letter> {
 
 fn read(path: &Path) -> Result<Vec<u8>, DecodeError> {
     if std::fs::metadata(path).map_err(unreadable)?.len() > MAX_BYTES {
-        return Err(DecodeError::TooLarge);
+        return Err(DecodeError::FileTooLarge(MAX_BYTES));
     }
     std::fs::read(path).map_err(unreadable)
 }

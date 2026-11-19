@@ -29,6 +29,8 @@ pub enum DecodeError {
     NoRoom,
     /// More than 100 megapixels.
     TooLarge,
+    /// A file bigger than its kind is read up to (this many bytes): refused before it is read.
+    FileTooLarge(u64),
     /// Not there, not a picture this program reads, or damaged; the text says which.
     Unreadable(String),
     /// A file that is no picture, which a viewer skips (a font, an archive, a program): not an error to report.
@@ -40,6 +42,7 @@ impl fmt::Display for DecodeError {
         match self {
             Self::NoRoom => f.write_str("no room"),
             Self::TooLarge => f.write_str("too large (over 100 megapixels)"),
+            Self::FileTooLarge(limit) => write!(f, "the file is too large (over {} MB)", limit / (1024 * 1024)),
             Self::Unreadable(why) => f.write_str(why),
             Self::NotAPicture => f.write_str("not a picture"),
         }
@@ -321,6 +324,23 @@ pub fn decode_page(path: &Path, page: usize) -> Result<(RgbaImage, usize), Decod
         return crate::html::render_page(path, page);
     }
     decode_full(path).map(|image| (image, 1))
+}
+
+/// As [`decode_page`], but a DjVu page is drawn at about the size at which it fits the box `max_width` x `max_height`, never smaller
+/// (`djvu::render_page_scaled`): a scan of 10 to 20 million pixels shown on a screen needs a small part of that. A box at least half
+/// as large as the page gives the whole page, as [`decode_page`] does. Any other file is as [`decode_page`] gives it.
+pub fn decode_page_within(
+    path: &Path,
+    page: usize,
+    max_width: usize,
+    max_height: usize,
+) -> Result<(RgbaImage, usize), DecodeError> {
+    if crate::djvu::is_djvu(path) {
+        let ((w, h), _) = crate::djvu::page_size(path, page)?;
+        let scale = crate::view::fit_scale((w, h), (max_width, max_height)).min(1.0);
+        return crate::djvu::render_page_scaled(path, page, scale);
+    }
+    decode_page(path, page)
 }
 
 /// A picture held in memory (one inside a document), turned upright, at its own size.

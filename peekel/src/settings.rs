@@ -15,6 +15,37 @@ pub enum Scope {
     AllBooks,
 }
 
+/// How the pages of a scanned book (DjVu) are made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scans {
+    /// With the pixels the window needs (`window`).
+    Window,
+    /// With twice the pixels the window needs, then shrunk as a whole page is (`finer`).
+    Finer,
+    /// At the scan's own size, then shrunk (`whole`, as before 0.5.0).
+    Whole,
+}
+
+impl Scans {
+    /// The word of the settings file.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::Finer => "finer",
+            Self::Whole => "whole",
+        }
+    }
+
+    /// The next one, for `v`: window, finer, whole, window.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Window => Self::Finer,
+            Self::Finer => Self::Whole,
+            Self::Whole => Self::Window,
+        }
+    }
+}
+
 /// What the author chose for one book with `d`, `e` and `o`: a thing that was not chosen is `None` and follows the default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BookChoice {
@@ -42,6 +73,8 @@ pub struct Settings {
     pub text_size: u32,
     /// The pages of books dark and their text light (`b`; `peekel_core::night`): for every book.
     pub night: bool,
+    /// How the pages of a scanned book (DjVu) are made (`v` goes through them).
+    pub scans: Scans,
     /// Where it is kept (nowhere: nothing is read or written).
     file: Option<PathBuf>,
 }
@@ -58,6 +91,7 @@ impl Settings {
             fonts: String::new(),
             text_size: 100,
             night: false,
+            scans: Scans::Window,
             file: None,
         }
     }
@@ -143,6 +177,12 @@ impl Settings {
                         self.night = v;
                     }
                 }
+                "scans" => match value.as_str() {
+                    "window" => self.scans = Scans::Window,
+                    "finer" => self.scans = Scans::Finer,
+                    "whole" => self.scans = Scans::Whole,
+                    _ => {}
+                },
                 // a path keeps its capitals
                 "fonts" => self.fonts = raw.to_string(),
                 _ => {}
@@ -178,6 +218,11 @@ impl Settings {
              # The night look of books (PDF, DjVu, FB2, EPUB, HTML): the pages dark and the text light (yes), or as they are (no); b changes it.\n\
              night = {}\n\
              \n\
+             # The pages of DjVu books (v goes through them): drawn for the window (window: the least memory, the quickest turning; a zoom\n\
+             # draws the page again with more detail), with twice the pixels of the window and then shrunk (finer), or whole at the size of\n\
+             # the scan and then shrunk (whole).\n\
+             scans = {}\n\
+             \n\
              # Folders of your own fonts (the originals copied from your Windows or Office), looked in first for the text of Word, Excel and\n\
              # PowerPoint pages and of cards; several folders are written the way PATH is (; on Windows, : elsewhere). Edit this file: it is not on the screen.\n\
              fonts = {}\n",
@@ -195,6 +240,7 @@ impl Settings {
             },
             self.text_size,
             yes_no(self.night),
+            self.scans.word(),
             self.fonts,
         )
     }
@@ -293,6 +339,24 @@ mod tests {
         assert!(again.night);
         again.parse("night = dusk\n");
         assert!(again.night, "a word not understood changes nothing");
+    }
+
+    #[test]
+    fn scans_are_drawn_for_the_window_by_default_and_whole_survives_a_save() {
+        let mut s = Settings::none();
+        assert_eq!(s.scans, Scans::Window);
+        for (word, scans) in [("Whole", Scans::Whole), ("finer", Scans::Finer)] {
+            s.parse(&format!("scans = {word}\n"));
+            assert_eq!(s.scans, scans);
+            let mut again = Settings::none();
+            again.parse(&s.text());
+            assert_eq!(again.scans, scans);
+            again.parse("scans = huge\n");
+            assert_eq!(again.scans, scans, "a word not understood changes nothing");
+        }
+        // v goes through the three and back
+        assert_eq!(Scans::Window.next().next().next(), Scans::Window);
+        assert_eq!(Scans::Window.next(), Scans::Finer);
     }
 
     #[test]

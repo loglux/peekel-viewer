@@ -135,7 +135,9 @@ The keys work with any keyboard layout in Windows Terminal, and with the Russian
 
 **The settings** (`s`, or the file `settings` beside the state below): pages side by side for each book or one choice for all, the
 defaults of a spread, the size of the text of FB2, EPUB and HTML, the night look of books, and **which files Space goes through**: pictures and documents (the
-default), books only (PDF, DjVu, FB2 and EPUB, for reading), or every file (the others shown as cards).
+default), books only (PDF, DjVu, FB2 and EPUB, for reading), or every file (the others shown as cards). The line `scans = window` (the
+default) draws the pages of DjVu books with the pixels the window needs, and again with more when you zoom in; `scans = whole` draws
+each page at the size of the scan.
 
 Options: `--cards` goes through every file for one run, `--no-state` neither keeps nor uses the place in each book, `--no-status`
 leaves out the line at the bottom, `--any-key` closes on any key, `--force` draws even when the terminal does not say it shows Sixel

@@ -28,7 +28,7 @@ use peekel_term::{RawMode, WindowSize, input, window_size};
 use files::Listing;
 use keys::{Action, KeyDecoder, action};
 use layout::{Cell, DEFAULT_CELL, cell_from_window, for_told_cells, origin, real_cell, room};
-use settings::{BookChoice, Scope, Settings};
+use settings::{BookChoice, Scans, Scope, Settings};
 use spread::Spread;
 use state::{Book, State};
 
@@ -155,6 +155,10 @@ const HELP_ROWS: &[(&str, &str)] = &[
         "night: the pages of books dark and the text light; again: as they are",
     ),
     (
+        "v",
+        "the pages of DjVu books drawn for the window, or whole at the size of the scan (to compare)",
+    ),
+    (
         "r, R",
         "turn the page a quarter clockwise, the other way (for a page scanned on its side)",
     ),
@@ -164,8 +168,9 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("Esc, q, Enter", "close"),
 ];
 
-/// How many rows the screen of the settings has (`Viewer::menu_rows`).
-const MENU_ROWS: usize = 6;
+/// How many rows the screen of the settings has (`Viewer::menu_rows`, an array of this length, so that a row added there and not here
+/// does not build: the night row once stood below the last row the keys reached).
+const MENU_ROWS: usize = 8;
 
 /// The screen of the settings, while it is shown: the row chosen (the rows are made from the settings: `Viewer::menu_rows`).
 struct Menu {
@@ -810,8 +815,41 @@ fn load(path: &Path, page: usize, cards: bool) -> Result<Loaded, DecodeError> {
     }
 }
 
+/// How many pixels the pages of a scan (DjVu) are made with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Detail {
+    /// At the scan's own size.
+    Whole,
+    /// Enough for the spread to fill this room, times the number given (`scans = window`: 1; `finer`: 2, shrunk then as a whole page
+    /// is): a page of 20 million pixels shown in a window of 2 needs a tenth of them; a zoom past that makes the page again with more
+    /// (`Viewer::enough_pixels`).
+    Room((usize, usize), f64),
+    /// At least this part of the scan's size (0 to 1).
+    Scale(f64),
+}
+
+/// What the setting `scans` does, in a few words (the screen of the settings, the message of `v`).
+fn scans_words(scans: Scans) -> &'static str {
+    match scans {
+        Scans::Window => "for the window",
+        Scans::Finer => "twice as fine as the window, then shrunk",
+        Scans::Whole => "whole, at the size of the scan",
+    }
+}
+
+/// The pixels the pages of a scan are read with for the setting `scans` and a window of `room`.
+fn detail_of(scans: Scans, room: (usize, usize)) -> Detail {
+    match scans {
+        Scans::Window => Detail::Room(room, 1.0),
+        Scans::Finer => Detail::Room(room, 2.0),
+        Scans::Whole => Detail::Whole,
+    }
+}
+
 /// The spread of a file that begins with page `start`, each page turned as `quarters` say (one number for each page of the spread), put
-/// together as `spread` says. A file of one page, a card, and a spread that would be too large come out as the first page alone.
+/// together as `spread` says. A file of one page, a card, and a spread that would be too large come out as the first page alone. The
+/// pages of a scan are made with the pixels `detail` says, and looked at as the whole pages ([`Image::reduced`]).
+#[allow(clippy::too_many_arguments)]
 fn load_spread(
     path: &Path,
     start: usize,
@@ -820,6 +858,7 @@ fn load_spread(
     cards: bool,
     mark: Option<&str>,
     night: bool,
+    detail: Detail,
 ) -> Result<Loaded, DecodeError> {
     let quarter = |i: usize| quarters.get(i).copied().unwrap_or(0);
     // an SVG is parsed once and kept with its picture, so that a zoom draws the part shown again from its shapes (a turned one is
@@ -864,6 +903,12 @@ fn load_spread(
     } else {
         spread.count
     };
+    if detail != Detail::Whole
+        && peekel_core::djvu::is_djvu(path)
+        && let Some(loaded) = load_scan_smaller(path, start, wanted, spread, &quarter, &marked, detail)
+    {
+        return Ok(loaded);
+    }
     let mut read: Vec<_> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..wanted)
             .map(|i| scope.spawn(move || decode_page(path, start + i)))
@@ -902,6 +947,85 @@ fn load_spread(
     })
 }
 
+/// The spread of a DjVu file made smaller than its scans, as `detail` says: the pages read at the same time, each at the same part of
+/// its size, so that they keep their sizes against each other, then marked, darkened and turned as the whole pages would be and put
+/// together. `None` when the whole pages are wanted after all (the room is not much smaller than the spread), or the first page
+/// cannot be read this way: the caller reads them whole, as before.
+fn load_scan_smaller(
+    path: &Path,
+    start: usize,
+    wanted: usize,
+    spread: Spread,
+    quarter: &dyn Fn(usize) -> i32,
+    marked: &dyn Fn(usize, peekel_core::view::RgbaImage) -> peekel_core::view::RgbaImage,
+    detail: Detail,
+) -> Option<Loaded> {
+    use peekel_core::view::{fit_scale, side_by_side_size};
+    let (first_size, pages) = peekel_core::djvu::page_size(path, start).ok()?;
+    let count = wanted.min(spread.len_at(start, pages)).max(1);
+    // the size of each page as the scan has it, and as it is shown (turned)
+    let mut own = vec![first_size];
+    for i in 1..count {
+        match peekel_core::djvu::page_size(path, start + i) {
+            Ok((size, _)) => own.push(size),
+            Err(_) => break,
+        }
+    }
+    let shown_size = |i: usize, (w, h): (u32, u32)| if quarter(i).rem_euclid(2) == 1 { (h, w) } else { (w, h) };
+    let shown: Vec<_> = own.iter().enumerate().map(|(i, &s)| shown_size(i, s)).collect();
+    // a spread too large for one picture is its first page alone, as with the whole pages
+    let shown = match side_by_side_size(&shown, spread.equal_height) {
+        Some(_) => shown,
+        None => shown[..1].to_vec(),
+    };
+    let whole = side_by_side_size(&shown, spread.equal_height)?;
+    let scale = match detail {
+        Detail::Room(room, more) => (fit_scale(whole, room) * more).min(1.0),
+        Detail::Scale(scale) => scale,
+        Detail::Whole => 1.0,
+    };
+    if scale > 0.5 {
+        return None;
+    }
+    let read: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..shown.len())
+            .map(|i| scope.spawn(move || peekel_core::djvu::render_page_scaled(path, start + i, scale)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().ok().and_then(Result::ok))
+            .collect()
+    });
+    let mut pictures = Vec::new();
+    for (i, page) in read.into_iter().enumerate() {
+        let Some((mut picture, _)) = page else { break };
+        // each page at exactly its part of its size, so that the pages keep their sizes against each other and the marks fall right
+        let (w, h) = own[i];
+        let side = |n: u32| ((f64::from(n) * scale).round() as u32).max(1);
+        if picture.dimensions() != (side(w), side(h)) {
+            picture = peekel_core::resize::triangle(&picture, side(w), side(h));
+        }
+        pictures.push(turned_rgba(marked(start + i, picture), quarter(i)));
+    }
+    if pictures.is_empty() {
+        return None;
+    }
+    let shown_count = pictures.len();
+    let whole = side_by_side_size(&shown[..shown_count], spread.equal_height)?;
+    let picture = if shown_count > 1 {
+        side_by_side(&pictures, spread.equal_height)?
+    } else {
+        pictures.swap_remove(0)
+    };
+    Some(Loaded {
+        image: Image::reduced(picture, whole),
+        shown: shown_count,
+        pages,
+        card: false,
+        note: None,
+    })
+}
+
 /// A file the night look is for: a book or a page to read (PDF, DjVu, FB2, EPUB, HTML), not a picture or a card.
 fn is_book(path: &Path) -> bool {
     peekel_core::pdf::is_pdf(path)
@@ -928,6 +1052,55 @@ impl Viewer {
         room(self.window, self.cell)
     }
 
+    /// The pixels the pages of a scan are read with, as the settings say.
+    fn detail(&self) -> Detail {
+        detail_of(self.settings.scans, self.room())
+    }
+
+    /// When the picture is a smaller copy of the pages (a scan read for the window) and the view shows it enlarged (a zoom, a window
+    /// made larger), the spread is read again with the pixels the view needs, and a little more so that the next step of a zoom needs no
+    /// reading; the whole pages when that is most of them. The zoom and the place stay. A spread that cannot be read again stays as it is.
+    fn enough_pixels(&mut self) {
+        if self.card {
+            return;
+        }
+        let room = self.room();
+        let Some(scale) = self.image.short(&self.view, room) else {
+            return;
+        };
+        let Some(path) = self.files.get(self.index).cloned() else {
+            return;
+        };
+        let (index, page, spread) = (self.index, self.page, self.spread);
+        let quarters: Vec<i32> = (0..spread.count).map(|i| self.quarters_for(index, page + i)).collect();
+        let mark = self.find.as_ref().map(|f| peekel_core::djvu::normalise(&f.needle));
+        let detail = Detail::Scale((scale * 1.5).min(1.0));
+        let Ok(loaded) = load_spread(
+            &path,
+            page,
+            spread,
+            &quarters,
+            false,
+            mark.as_deref(),
+            self.settings.night,
+            detail,
+        ) else {
+            return;
+        };
+        if loaded.card || loaded.shown != self.shown {
+            return;
+        }
+        let (before, after) = (self.image.size(), loaded.image.size());
+        if before != after {
+            // (the same pages give the same size; kept in step all the same)
+            self.view = self
+                .view
+                .relative(before, room)
+                .map_or_else(|| View::new(after), |r| View::from_relative(r, after, room));
+        }
+        self.image = loaded.image;
+    }
+
     /// The window's pixels for the current zoom and position, as Sixel.
     /// With `coarse` (the strength of the dithering) the palette is the one made once for the whole picture and the
     /// dithering is the cheap ordered kind: a frame for the moment while the picture is being moved, a fraction of the
@@ -944,6 +1117,10 @@ impl Viewer {
             && ready.view == self.view
         {
             return Ok(ready.rendered);
+        }
+        // a page of a scan read for the window and now shown larger is read again with more pixels (not for the quick frames of a move)
+        if coarse.is_none() && !showing_info {
+            self.enough_pixels();
         }
         if showing_info {
             self.make_info(room);
@@ -1115,10 +1292,23 @@ impl Viewer {
             self.files.len(),
             self.message.as_deref().or(found.as_deref()).unwrap_or(HINT),
         );
+        // for a DjVu book, how its pages are drawn (`v` changes it)
+        let scans = if self
+            .files
+            .get(self.index)
+            .is_some_and(|p| peekel_core::djvu::is_djvu(p))
+        {
+            format!(" (v: {})", self.settings.scans.word())
+        } else {
+            String::new()
+        };
         let text = if self.card {
             format!(" {name} | card | {tail}")
         } else {
-            format!(" {name}{page} | {w}x{h} | {}% | {tail}", (scale * 100.0).round() as u32)
+            format!(
+                " {name}{page} | {w}x{h}{scans} | {}% | {tail}",
+                (scale * 100.0).round() as u32
+            )
         };
         let width = usize::from(self.window.cols).saturating_sub(1);
         let mut line: String = text.chars().take(width).collect();
@@ -1249,6 +1439,7 @@ impl Viewer {
         let quarters: Vec<i32> = (0..spread.count).map(|i| self.quarters_for(index, page + i)).collect();
         let mark = self.find.as_ref().map(|f| peekel_core::djvu::normalise(&f.needle));
         let night = self.settings.night;
+        let detail = self.detail();
         let canvas = ahead.then(|| self.canvas());
         Some(Preload {
             index,
@@ -1257,7 +1448,7 @@ impl Viewer {
             turned: self.turned,
             quick: false,
             handle: std::thread::spawn(move || {
-                let mut loaded = load_spread(&path, page, spread, &quarters, cards, mark.as_deref(), night)?;
+                let mut loaded = load_spread(&path, page, spread, &quarters, cards, mark.as_deref(), night, detail)?;
                 // the frame too, whole and in the middle of the window, as a picture is first shown: the key waits only for the writing
                 let ready = canvas.filter(|_| !loaded.card).and_then(|canvas| {
                     let view = View::new(loaded.image.size());
@@ -1821,6 +2012,7 @@ impl Viewer {
             Action::NextHit => self.go_to_hit(true)?,
             Action::PrevHit => self.go_to_hit(false)?,
             Action::Night => self.set_night(!self.settings.night)?,
+            Action::Scans => self.set_scans(self.settings.scans.next()),
             Action::TextLarger | Action::TextSmaller if self.show_info && !self.card => {
                 self.message = Some("properties: i goes back to the picture".to_string());
             }
@@ -2140,7 +2332,7 @@ impl Viewer {
     /// The rows of the screen of the settings: what each is and what it is now.
     fn menu_rows(&self) -> Vec<(String, String)> {
         let yes_no = |v: bool| if v { "yes" } else { "no" }.to_string();
-        vec![
+        let rows: [(String, String); MENU_ROWS] = [
             (
                 "Pages side by side and their height are chosen".to_string(),
                 match self.settings.scope {
@@ -2178,7 +2370,12 @@ impl Viewer {
                 "Night: the pages of books dark (b)".to_string(),
                 yes_no(self.settings.night),
             ),
-        ]
+            (
+                "The pages of DjVu books drawn (v)".to_string(),
+                scans_words(self.settings.scans).to_string(),
+            ),
+        ];
+        rows.into()
     }
 
     /// Which files of the folder are gone through: the setting, or every file with `--cards` (`PEEKEL_CARDS`) for this run.
@@ -2230,6 +2427,14 @@ impl Viewer {
                 return self.set_text_size(if forward { now + step } else { now.saturating_sub(step) });
             }
             6 => return self.set_night(!self.settings.night),
+            7 => {
+                self.set_scans(if forward {
+                    self.settings.scans.next()
+                } else {
+                    self.settings.scans.next().next()
+                });
+                return Ok(());
+            }
             _ => return Ok(()),
         }
         self.settings.save();
@@ -2862,6 +3067,28 @@ impl Viewer {
         self.go_page(start)
     }
 
+    /// Draws the pages of DjVu books as `scans` says (`v`, the settings) and writes it in the settings; the book on the screen, if it
+    /// is one, is read again, its zoom and place kept (the page is as large to the view either way).
+    fn set_scans(&mut self, scans: Scans) {
+        self.settings.scans = scans;
+        self.settings.save();
+        self.info = None;
+        // short: the line at the bottom says the way after the size of the page all the time
+        self.message = Some(format!("DjVu: {} (v: {})", scans.word(), scans.next().word()));
+        // what was read ahead or kept was made with the other pixels
+        self.preload = None;
+        self.behind = None;
+        self.turned += 1;
+        if self
+            .files
+            .get(self.index)
+            .is_some_and(|p| !self.card && peekel_core::djvu::is_djvu(p))
+        {
+            self.asked = Instant::now();
+            self.pending = self.take_read(self.index, self.spread.start_of(self.page));
+        }
+    }
+
     /// Turns the night look of books on or off and writes it in the settings; the book on the screen, if it is one, is read again in
     /// the new look, the same pages kept. A picture or a card is not touched: the look holds for the next book.
     fn set_night(&mut self, on: bool) -> Result<(), String> {
@@ -3001,6 +3228,7 @@ fn show(path: &Path, options: Options) -> Result<Report, String> {
         listing(&options, &settings) == Listing::Every,
         None,
         settings.night,
+        detail_of(settings.scans, room(window, cell)),
     ) {
         // a file that is no picture is passed over without a word (the cards are an option)
         Err(DecodeError::NotAPicture) => return Ok(Report::default()),
@@ -3277,6 +3505,51 @@ mod tests {
         assert_eq!(page_of_number("", 300), None);
         assert_eq!(page_of_number("12a", 300), None);
         assert_eq!(page_of_number("5", 0), None);
+    }
+
+    #[test]
+    fn a_scan_read_for_a_small_window_is_looked_at_as_the_whole_page_and_read_again_whole_when_wanted() {
+        use super::{Detail, load_spread};
+        use crate::spread::Spread;
+        use peekel_core::view::{View, render};
+        // the test page of the core: 72 x 72, its background 24 x 24
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/tests/djvu/ramp.djvu");
+        let one = Spread {
+            count: 1,
+            ..Spread::DEFAULT
+        };
+        let read =
+            |detail, quarters: &[i32]| load_spread(&path, 0, one, quarters, false, None, false, detail).expect("reads");
+        let mut whole = read(Detail::Whole, &[0]);
+        let mut small = read(Detail::Room((18, 18), 1.0), &[0]);
+        assert_eq!(small.image.size(), whole.image.size(), "the same picture to the view");
+        assert_eq!((small.pages, small.shown), (1, 1));
+        let fit = View::new(whole.image.size());
+        assert_eq!(
+            small.image.short(&fit, (18, 18)),
+            None,
+            "enough pixels for the room it was read for"
+        );
+        assert!(
+            small.image.short(&fit, (72, 72)).is_some(),
+            "a larger window wants more"
+        );
+        // the frames for the small room come out the same size, and alike
+        let a = render(&mut small.image, &fit, (18, 18)).expect("a frame");
+        let b = render(&mut whole.image, &fit, (18, 18)).expect("a frame");
+        assert_eq!((a.picture.width, a.picture.height), (b.picture.width, b.picture.height));
+        // turned a quarter, the whole size is turned too
+        let turned = read(Detail::Room((18, 18), 1.0), &[1]);
+        assert_eq!(turned.image.size(), (72, 72));
+        // twice as fine: still a smaller copy (36 of 72), never short at the room it was read for
+        let finer = read(Detail::Room((9, 9), 2.0), &[0]);
+        assert_eq!(finer.image.size(), (72, 72));
+        assert_eq!(finer.image.short(&fit, (9, 9)), None);
+        assert_eq!(finer.image.short(&fit, (18, 18)), None, "twice the room: still enough");
+        // a room larger than half the page: the whole page, as before
+        let large = read(Detail::Room((60, 60), 1.0), &[0]);
+        assert_eq!(large.image.short(&fit, (72, 72)), None);
+        assert_eq!(large.image.size(), (72, 72));
     }
 
     /// A file of its own in the system's temporary folder, removed by the caller.

@@ -60,6 +60,8 @@ pub enum Action {
     GoToPage,
     /// The night look of books on or off (`b`): the pages dark and the text light.
     Night,
+    /// The pages of DjVu books drawn for the window or whole (`v`), to compare the two on the same page.
+    Scans,
     /// The list of the keys, in place of the picture until any key is pressed.
     Help,
 }
@@ -191,6 +193,7 @@ pub fn action(key: &[u8]) -> Option<Action> {
         b"F" => TextSmaller,
         b"p" | b"P" => GoToPage,
         b"b" | b"B" => Night,
+        b"v" | b"V" => Scans,
         // F1 is `ESC O P` in xterm and most terminals, `ESC [ 11 ~` in some
         b"?" | b"\x1bOP" | b"\x1b[11~" => Help,
         b"\x1b[H" | b"\x1bOH" | b"\x1b[1~" => BookStart,
@@ -395,6 +398,14 @@ mod tests {
         // the key of f has а on it in the Russian layout
         assert_eq!(latin_key('а'), Some('f'));
         assert_eq!(latin_key('А'), Some('F'));
+    }
+
+    #[test]
+    fn v_switches_how_djvu_pages_are_drawn_in_either_layout() {
+        assert_eq!(action(b"v"), Some(Action::Scans));
+        assert_eq!(action(b"V"), Some(Action::Scans));
+        // the key of v has м on it in the Russian layout
+        assert_eq!(latin_key('м'), Some('v'));
     }
 
     #[test]
