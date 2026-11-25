@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Peekel privacy policy</title>
+<meta name="description" content="What Peekel for Android does with your data.">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<div class="wrap">
+<header>
+  <a href="../"><img src="../assets/icon.svg" alt="Peekel"></a>
+  <div>
+    <h1><a href="../">Peekel</a></h1>
+    <p>Privacy policy of Peekel for Android</p>
+  </div>
+</header>
+
+<article>
+<p><strong>Peekel</strong> is a book reader for Android. This policy says what it does with your data. In short: <strong>your books
+and settings stay on your device.</strong> The app sends anonymous statistics of its use and reports of its crashes, which you can
+turn off at any time, and which never hold your books, the words you read or the addresses of your servers.</p>
+
+<h2>What the app keeps, on your device only</h2>
+<ul>
+  <li>The books you add (copied into the app's own storage), their covers, where you are in each book, your bookmarks and settings.</li>
+  <li>The network sources you add (a shared folder, WebDAV, a catalogue): their addresses and user names, and passwords, which are
+    sealed with the Android keystore of your device.</li>
+</ul>
+<p>None of this is sent to us. If Android's own backup of apps is on for your device, Android may keep the library (where you are
+in each book), the settings and the sources in your Google account, as it does for other apps; the books themselves are left out,
+and a password sealed by the keystore cannot be opened on another device. Removing the app removes all of it from the device.</p>
+
+<h2>What goes over the network, and only when you ask</h2>
+<ul>
+  <li><strong>The sources you open</strong>: the app connects to the catalogue, shared folder or WebDAV server you chose (or one of
+    the catalogues it comes with: Project Gutenberg, Wikisource, ManyBooks, and ImWerden if you add it) to list and download books.
+    Those servers see what any visit sees (your address, what is asked for) and follow their own policies.</li>
+  <li><strong>Finding shared folders</strong>: "Find in the network" asks the devices of your home network, and only those, which of
+    them share folders.</li>
+  <li><strong>Uploading from a browser</strong>: while that screen is open, the app listens in your home network for a browser that
+    knows the code shown on the screen, and takes the books it sends.</li>
+</ul>
+
+<h2>Statistics and crash reports, and how to turn them off</h2>
+<p>They are on from the start. To turn them off, open Settings, "Privacy", and turn off "Send anonymous statistics": the app sends
+one last note that they were turned off, with nothing else in it, and from then on nothing is sent.</p>
+<p>While they are on, the app uses Google's Firebase Analytics and Firebase Crashlytics to send:</p>
+<ul>
+  <li>which formats are opened, how long the first page took and how long the book is (in rough steps, not exact numbers), and
+    whether a book could not be opened (its format only);</li>
+  <li>how books are added (from files, a folder, another app, a browser, the network) and how many (in rough steps);</li>
+  <li>which kind of network source is added (a catalogue, WebDAV, a shared folder), and whether it was found or typed;</li>
+  <li>which settings are turned on or off;</li>
+  <li>which parts of the reader are used (the contents, bookmarks, search, zoom, a word looked up), never what was searched or
+    looked up;</li>
+  <li>how long a book is read at a time and how many pages are turned (in rough steps), the look of the page (day, sepia, night),
+    and whether a book was read to its end;</li>
+  <li>about how many books the library holds (in rough steps);</li>
+  <li>reports of crashes and of errors of the reading code, with the app's state at the time (never the book);</li>
+  <li>what Firebase gathers for every app: when the app was first opened, how long it is used, its version, the device's model,
+    Android version, language and country, and an identifier of this installation of the app (not of you, not the advertising id).</li>
+</ul>
+<p><strong>Never sent</strong>: the titles, authors or files of your books, their text, the words you look up, the addresses, user
+names or passwords of your sources. The app does not use the advertising id, and nothing is used for adverts. Google processes this
+data for us under its own terms (<a href="https://firebase.google.com/support/privacy">firebase.google.com/support/privacy</a>).</p>
+
+<h2>Other apps</h2>
+<p>A word you look up, or a request you send, goes to the app you choose on your device (a translator, a dictionary, an assistant),
+through Android's own sharing. What that app does with it is under its own policy.</p>
+
+<h2>What the app does not do</h2>
+<p>No account, no adverts, no advertising id, no data sold. No statistics once you turn them off. The app's permissions are for the
+internet (the sources above, and the statistics).</p>
+
+<h2>Children</h2>
+<p>The app is not aimed at children.</p>
+
+<h2>Changes and contact</h2>
+<p>A change to this policy is published here with its date. Questions: <a href="mailto:contact@loglux.uk">contact@loglux.uk</a>.</p>
+<p>Last changed: 25 November 2026.</p>
+</article>
+
+<footer><a href="../">Peekel</a> · contact@loglux.uk</footer>
+</div>
+</body>
+</html>
