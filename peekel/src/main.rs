@@ -2,12 +2,10 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod files;
-mod find;
 mod install;
 mod keys;
 mod layout;
 mod settings;
-mod spread;
 mod state;
 
 use std::ffi::OsString;
@@ -21,7 +19,9 @@ use peekel_core::decode::{DecodeError, decode_page, mark_words, page_at, page_te
 use peekel_core::photo::{Steady, quantize};
 use peekel_core::quantize::Indexed;
 use peekel_core::sixel;
+// the spread and the search live in the core, shared with Peekel TV
 use peekel_core::view::{Image, Relative, Size, View, ZOOM_STEP, render, render_sharp, side_by_side, turned_rgba};
+use peekel_core::{find, spread};
 use peekel_term::reply::{Event, Parser};
 use peekel_term::{RawMode, WindowSize, input, window_size};
 
@@ -39,8 +39,8 @@ fn plain(text: &str) -> String {
 
 const USAGE: &str = "usage: peekel [options] <file>
 
-Shows a picture, an SVG, the start of a Word, Excel, PowerPoint or OpenDocument file, and on request (--cards) a card for any other file; reads PDF,
-DjVu, FB2 and EPUB books (and HTML pages) page by page. In a terminal that displays Sixel graphics (Windows Terminal 1.22 or
+Shows a picture, an SVG, the start of an Excel, PowerPoint or OpenDocument file, and on request (--cards) a card for any other file; reads PDF,
+DjVu, FB2 and EPUB books (and HTML pages and Word documents) page by page. In a terminal that displays Sixel graphics (Windows Terminal 1.22 or
 later, xterm, mlterm, foot and others), with the other files of its folder.
 
 keys:
@@ -148,7 +148,11 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("e", "pages of a spread equally high, or each in its own size"),
     (
         "f, F",
-        "the text of an FB2 or EPUB book larger, smaller (laid out again)",
+        "the text of an FB2, EPUB or Word book larger, smaller (laid out again)",
+    ),
+    (
+        "t",
+        "paragraphs an EPUB, HTML or Word book sets left justified too, or left as the book sets them",
     ),
     (
         "b",
@@ -168,13 +172,122 @@ const HELP_ROWS: &[(&str, &str)] = &[
     ("Esc, q, Enter", "close"),
 ];
 
-/// How many rows the screen of the settings has (`Viewer::menu_rows`, an array of this length, so that a row added there and not here
-/// does not build: the night row once stood below the last row the keys reached).
-const MENU_ROWS: usize = 8;
+/// A setting on the screen of the settings (`s`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Setting {
+    TextSize,
+    Justify,
+    MarkParagraphs,
+    ChosenSize,
+    CodeBackdrop,
+    Night,
+    Scope,
+    Pages,
+    EqualHeight,
+    CoverAlone,
+    Scans,
+    ScansAsDjvulibre,
+    Browse,
+}
 
-/// The screen of the settings, while it is shown: the row chosen (the rows are made from the settings: `Viewer::menu_rows`).
+/// A line of the screen of the settings: the name of a part, or a setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MenuLine {
+    Part(&'static str),
+    Row(Setting),
+}
+
+/// The lines of the screen of the settings, in their parts. Every setting is here once (a test says so): the keys and the mouse go
+/// through the rows of this list, so a setting left out could not be reached (the night row once stood below the last row the keys
+/// reached).
+const MENU: [MenuLine; 17] = [
+    MenuLine::Part("Books whose text flows: FB2, EPUB, HTML, Word"),
+    MenuLine::Row(Setting::TextSize),
+    MenuLine::Row(Setting::Justify),
+    MenuLine::Row(Setting::MarkParagraphs),
+    MenuLine::Row(Setting::ChosenSize),
+    MenuLine::Row(Setting::CodeBackdrop),
+    MenuLine::Part("Pages of every book"),
+    MenuLine::Row(Setting::Night),
+    MenuLine::Row(Setting::Scope),
+    MenuLine::Row(Setting::Pages),
+    MenuLine::Row(Setting::EqualHeight),
+    MenuLine::Row(Setting::CoverAlone),
+    MenuLine::Part("DjVu"),
+    MenuLine::Row(Setting::Scans),
+    MenuLine::Row(Setting::ScansAsDjvulibre),
+    MenuLine::Part("Files"),
+    MenuLine::Row(Setting::Browse),
+];
+
+/// Whether line `i` of `MENU` is a setting (not the name of a part).
+fn menu_is_row(i: usize) -> bool {
+    matches!(MENU.get(i), Some(MenuLine::Row(_)))
+}
+
+/// The line of `MENU` of the next setting below `from` (`down`) or above it, past the names of the parts; `from` when there is none.
+fn menu_next(from: usize, down: bool) -> usize {
+    if down {
+        (from + 1..MENU.len()).find(|&i| menu_is_row(i)).unwrap_or(from)
+    } else {
+        (0..from.min(MENU.len()))
+            .rev()
+            .find(|&i| menu_is_row(i))
+            .unwrap_or(from)
+    }
+}
+
+/// The line of `MENU` of the first setting (`first`) or the last.
+fn menu_end(first: bool) -> usize {
+    if first {
+        (0..MENU.len()).find(|&i| menu_is_row(i)).unwrap_or(0)
+    } else {
+        (0..MENU.len()).rev().find(|&i| menu_is_row(i)).unwrap_or(0)
+    }
+}
+
+/// How many lines the screen of the settings has: those of `MENU`, and the one that says where the settings are saved.
+fn menu_total() -> usize {
+    MENU.len() + 1
+}
+
+/// What a setting does, in one line: it stands under the title of the screen while the setting is chosen.
+fn setting_hint(setting: Setting) -> &'static str {
+    match setting {
+        Setting::TextSize => "The size of the text, in per cent of the book's own; the book is laid out again",
+        Setting::Justify => {
+            "Yes: paragraphs a book sets left are justified and hyphenated too; centred and right stay so"
+        }
+        Setting::MarkParagraphs => {
+            "Yes: a paragraph with no indent and no space above it gets an indent; a table gets room below it"
+        }
+        Setting::ChosenSize => {
+            "Yes: the size most of the text is set in is the size chosen, headings in proportion; no: the book's sizes"
+        }
+        Setting::CodeBackdrop => "Yes: blocks of program code are drawn on a light shade",
+        Setting::Night => {
+            "Yes: the pages dark and the text light, for the dark; photographs and covers stay as they are"
+        }
+        Setting::Scope => {
+            "For each book: d and e are remembered for the book; for all books: they change the defaults below"
+        }
+        Setting::Pages => "How many pages stand side by side in a book given no choice of its own (d for a book)",
+        Setting::EqualHeight => "Yes: the pages of a spread made as high as the tallest one (e for a book)",
+        Setting::CoverAlone => "Yes: the first page alone, then 2-3, 4-5; no: 1-2, 3-4 (o for a book)",
+        Setting::Scans => {
+            "window: for the window, the least memory; finer: twice the pixels, shrunk; whole: the scan's own size"
+        }
+        Setting::ScansAsDjvulibre => {
+            "Yes: a page drawn at half its scan or smaller made as DjVuLibre makes it; no: ours, sharper letters"
+        }
+        Setting::Browse => "Which files of the folder Space and Backspace go through",
+    }
+}
+
+/// The screen of the settings, while it is shown: the line of `MENU` chosen (always a setting) and the first line on the screen.
 struct Menu {
     selected: usize,
+    first: usize,
 }
 
 /// What is drawn of the list of contents (see `Viewer::toc_list`).
@@ -1026,13 +1139,14 @@ fn load_scan_smaller(
     })
 }
 
-/// A file the night look is for: a book or a page to read (PDF, DjVu, FB2, EPUB, HTML), not a picture or a card.
+/// A file the night look is for: a book or a page to read (PDF, DjVu, FB2, EPUB, HTML, Word), not a picture or a card.
 fn is_book(path: &Path) -> bool {
     peekel_core::pdf::is_pdf(path)
         || peekel_core::djvu::is_djvu(path)
         || peekel_core::fb2::is_fb2(path)
         || peekel_core::epub::is_epub(path)
         || peekel_core::html::is_html(path)
+        || peekel_core::docx::is_docx(path)
 }
 
 fn write_out(parts: &[&str]) -> io::Result<()> {
@@ -1218,6 +1332,7 @@ impl Viewer {
         // the lines of the list that fit, the chosen one always among them
         let shape = self.list_shape_in(room);
         self.toc_fit(shape.rows);
+        self.menu_fit(shape.rows);
         self.info = if let Some(list) = self.toc_list(shape.rows) {
             peekel_core::card::render_list(
                 "Contents",
@@ -1232,14 +1347,14 @@ impl Viewer {
                 self.background,
             )
             .ok()
-        } else if let Some(selected) = self.menu.as_ref().map(|m| m.selected) {
-            let list = self.menu_list(selected);
+        } else if self.menu.is_some() {
+            let list = self.menu_list(shape.rows);
             peekel_core::card::render_list(
                 "Settings",
                 &list.subtitle,
                 &list.lines,
                 list.marked,
-                0,
+                list.first,
                 list.total,
                 room.0,
                 room.1,
@@ -1978,7 +2093,10 @@ impl Viewer {
                 });
             }
             Action::Settings => {
-                self.menu = Some(Menu { selected: 0 });
+                self.menu = Some(Menu {
+                    selected: menu_end(true),
+                    first: 0,
+                });
                 self.info = None;
                 self.drawn = None;
             }
@@ -2012,6 +2130,10 @@ impl Viewer {
             Action::NextHit => self.go_to_hit(true)?,
             Action::PrevHit => self.go_to_hit(false)?,
             Action::Night => self.set_night(!self.settings.night)?,
+            Action::Justify if self.show_info && !self.card => {
+                self.message = Some("properties: i goes back to the picture".to_string());
+            }
+            Action::Justify => self.set_book_look(Setting::Justify)?,
             Action::Scans => self.set_scans(self.settings.scans.next()),
             Action::TextLarger | Action::TextSmaller if self.show_info && !self.card => {
                 self.message = Some("properties: i goes back to the picture".to_string());
@@ -2265,10 +2387,11 @@ impl Viewer {
                     || peekel_core::fb2::is_fb2(&path)
                     || peekel_core::epub::is_epub(&path)
                     || peekel_core::html::is_html(&path)
+                    || peekel_core::docx::is_docx(&path)
                 {
                     "this book has no contents"
                 } else {
-                    "only DjVu, PDF, FB2 and EPUB books have a contents"
+                    "only DjVu, PDF, FB2, EPUB, HTML and Word books have a contents"
                 };
                 self.message = Some(said.to_string());
                 self.quiet_message = true;
@@ -2329,53 +2452,40 @@ impl Viewer {
         Ok(true)
     }
 
-    /// The rows of the screen of the settings: what each is and what it is now.
-    fn menu_rows(&self) -> Vec<(String, String)> {
+    /// A row of the screen of the settings: what the setting is and what it is now.
+    fn setting_row(&self, setting: Setting) -> (&'static str, String) {
         let yes_no = |v: bool| if v { "yes" } else { "no" }.to_string();
-        let rows: [(String, String); MENU_ROWS] = [
-            (
-                "Pages side by side and their height are chosen".to_string(),
-                match self.settings.scope {
+        let s = &self.settings;
+        match setting {
+            Setting::TextSize => ("Size of the text (f, F)", format!("{} %", s.text_size)),
+            Setting::Justify => ("Paragraphs justified (t)", yes_no(s.justify)),
+            Setting::MarkParagraphs => ("Paragraphs always set apart", yes_no(s.mark_paragraphs)),
+            Setting::ChosenSize => ("The text at the size chosen", yes_no(s.chosen_size)),
+            Setting::CodeBackdrop => ("Code on a shade", yes_no(s.code_backdrop)),
+            Setting::Night => ("Night: the pages dark (b)", yes_no(s.night)),
+            Setting::Scope => (
+                "Pages side by side and their height are chosen",
+                match s.scope {
                     Scope::EachBook => "for each book",
                     Scope::AllBooks => "for all books",
                 }
                 .to_string(),
             ),
-            (
-                "Pages side by side (the default)".to_string(),
-                self.settings.pages.to_string(),
-            ),
-            (
-                "Pages made equally high (the default)".to_string(),
-                yes_no(self.settings.equal_height),
-            ),
-            (
-                "The first page stands alone (the default)".to_string(),
-                yes_no(self.settings.cover_alone),
-            ),
-            (
-                "Space and Backspace go through".to_string(),
+            Setting::Pages => ("Pages side by side (the default)", s.pages.to_string()),
+            Setting::EqualHeight => ("Pages made equally high (the default)", yes_no(s.equal_height)),
+            Setting::CoverAlone => ("The first page stands alone (the default)", yes_no(s.cover_alone)),
+            Setting::Scans => ("Pages drawn (v)", scans_words(s.scans).to_string()),
+            Setting::ScansAsDjvulibre => ("Small pages as DjVuLibre makes them", yes_no(s.scans_as_djvulibre)),
+            Setting::Browse => (
+                "Space and Backspace go through",
                 match self.listing() {
                     Listing::Every => "every file (the rest as cards)",
                     Listing::Pictures => "pictures and documents",
-                    Listing::Books => "books only (PDF, DjVu)",
+                    Listing::Books => "books only",
                 }
                 .to_string(),
             ),
-            (
-                "The text of FB2, EPUB and HTML (f, F)".to_string(),
-                format!("{} %", self.settings.text_size),
-            ),
-            (
-                "Night: the pages of books dark (b)".to_string(),
-                yes_no(self.settings.night),
-            ),
-            (
-                "The pages of DjVu books drawn (v)".to_string(),
-                scans_words(self.settings.scans).to_string(),
-            ),
-        ];
-        rows.into()
+        }
     }
 
     /// Which files of the folder are gone through: the setting, or every file with `--cards` (`PEEKEL_CARDS`) for this run.
@@ -2388,23 +2498,34 @@ impl Viewer {
         self.listing() == Listing::Every
     }
 
-    /// Changes the setting of row `row` (to the next value, or with `forward` false the one before), writes the settings, and puts the
-    /// pages of the book on the screen together as they now say.
-    fn change_setting(&mut self, row: usize, forward: bool) -> Result<(), String> {
-        match row {
-            0 => {
+    /// Changes the setting of line `line` of `MENU` (to the next value, or with `forward` false the one before), writes the settings,
+    /// and puts the pages of the book on the screen together as they now say.
+    fn change_setting(&mut self, line: usize, forward: bool) -> Result<(), String> {
+        let Some(MenuLine::Row(setting)) = MENU.get(line).copied() else {
+            return Ok(());
+        };
+        match setting {
+            Setting::Scope => {
                 self.settings.scope = match self.settings.scope {
                     Scope::EachBook => Scope::AllBooks,
                     Scope::AllBooks => Scope::EachBook,
                 };
             }
-            1 => {
+            Setting::Pages => {
                 let at = self.settings.pages;
                 self.settings.pages = if forward { at % 3 + 1 } else { (at + 1) % 3 + 1 };
             }
-            2 => self.settings.equal_height = !self.settings.equal_height,
-            3 => self.settings.cover_alone = !self.settings.cover_alone,
-            4 => {
+            Setting::EqualHeight => self.settings.equal_height = !self.settings.equal_height,
+            Setting::CoverAlone => self.settings.cover_alone = !self.settings.cover_alone,
+            Setting::Justify | Setting::MarkParagraphs | Setting::ChosenSize | Setting::CodeBackdrop => {
+                self.info = None;
+                return self.set_book_look(setting);
+            }
+            Setting::ScansAsDjvulibre => {
+                self.set_scans_as_djvulibre(!self.settings.scans_as_djvulibre);
+                return Ok(());
+            }
+            Setting::Browse => {
                 let order = [Listing::Pictures, Listing::Books, Listing::Every];
                 let at = order.iter().position(|l| *l == self.settings.browse).unwrap_or(0);
                 let next = if forward { at + 1 } else { at + order.len() - 1 };
@@ -2420,14 +2541,14 @@ impl Viewer {
                 self.toc_choice = None;
                 self.turned += 1;
             }
-            5 => {
+            Setting::TextSize => {
                 let step = peekel_core::book::TEXT_SIZE_STEP;
                 let now = self.settings.text_size;
                 self.info = None;
                 return self.set_text_size(if forward { now + step } else { now.saturating_sub(step) });
             }
-            6 => return self.set_night(!self.settings.night),
-            7 => {
+            Setting::Night => return self.set_night(!self.settings.night),
+            Setting::Scans => {
                 self.set_scans(if forward {
                     self.settings.scans.next()
                 } else {
@@ -2435,7 +2556,6 @@ impl Viewer {
                 });
                 return Ok(());
             }
-            _ => return Ok(()),
         }
         self.settings.save();
         self.info = None;
@@ -2465,7 +2585,7 @@ impl Viewer {
         let Some(menu) = self.menu.as_mut() else {
             return Ok(false);
         };
-        let rows = MENU_ROWS;
+        let (before, first_before) = (menu.selected, menu.first);
         match key {
             b"\x1b" | b"\x03" | b"q" | b"Q" | b"s" | b"S" => {
                 self.menu = None;
@@ -2474,30 +2594,29 @@ impl Viewer {
                 Ok(true)
             }
             b"\r" | b"\n" | b" " => {
-                let row = menu.selected;
-                self.change_setting(row, true)?;
+                self.change_setting(before, true)?;
                 Ok(true)
             }
             _ => match action(key) {
                 Some(Action::Pan(_, dy)) if dy != 0 => {
-                    let before = menu.selected;
-                    menu.selected = (menu.selected + usize::from(dy > 0))
-                        .saturating_sub(usize::from(dy < 0))
-                        .min(rows - 1);
-                    self.menu_moved(before)
+                    menu.selected = if dy > 0 {
+                        menu_next(before, true)
+                    } else {
+                        menu_next(before, false)
+                    };
+                    self.menu_moved(before, first_before)
                 }
                 Some(Action::Pan(dx, _)) if dx != 0 => {
-                    let row = menu.selected;
-                    self.change_setting(row, dx > 0)?;
+                    self.change_setting(before, dx > 0)?;
                     Ok(true)
                 }
                 Some(Action::BookStart | Action::First) => {
-                    let before = std::mem::replace(&mut menu.selected, 0);
-                    self.menu_moved(before)
+                    menu.selected = menu_end(true);
+                    self.menu_moved(before, first_before)
                 }
                 Some(Action::BookEnd | Action::Last) => {
-                    let before = std::mem::replace(&mut menu.selected, rows - 1);
-                    self.menu_moved(before)
+                    menu.selected = menu_end(false);
+                    self.menu_moved(before, first_before)
                 }
                 _ => Ok(false),
             },
@@ -2513,30 +2632,49 @@ impl Viewer {
         let Some(menu) = self.menu.as_mut() else {
             return Ok(false);
         };
+        let (before, first_before) = (menu.selected, menu.first);
         match (button, press) {
             (WHEEL, _) => {
-                let before = menu.selected;
-                menu.selected = menu.selected.saturating_sub(1);
-                self.menu_moved(before)
+                menu.selected = menu_next(before, false);
+                self.menu_moved(before, first_before)
             }
             (65, _) => {
-                let before = menu.selected;
-                menu.selected = (menu.selected + 1).min(MENU_ROWS - 1);
-                self.menu_moved(before)
+                menu.selected = menu_next(before, true);
+                self.menu_moved(before, first_before)
             }
             (0, true) => {
                 // the picture is as large as the room, so its pixels are those of the window (rows count from 1)
                 let y = row.saturating_sub(1) as f32 * cell_height + cell_height / 2.0;
-                match peekel_core::card::list_row_at(shape, y) {
-                    Some(at) if at < MENU_ROWS => {
-                        menu.selected = at;
-                        self.change_setting(at, true)?;
+                let line = peekel_core::card::list_row_at(shape, y).map(|at| menu.first + at);
+                match line {
+                    // the name of a part is not a setting
+                    Some(line) if matches!(MENU.get(line), Some(MenuLine::Row(_))) => {
+                        menu.selected = line;
+                        self.change_setting(line, true)?;
                         Ok(true)
                     }
                     _ => Ok(false),
                 }
             }
             _ => Ok(false),
+        }
+    }
+
+    /// Keeps the chosen line of the settings among the `rows` on the screen, with the name of its part above it when that is the line
+    /// before.
+    fn menu_fit(&mut self, rows: usize) {
+        if let Some(menu) = self.menu.as_mut() {
+            let rows = rows.max(1);
+            let top = match menu.selected.checked_sub(1).and_then(|i| MENU.get(i)) {
+                Some(MenuLine::Part(_)) => menu.selected - 1,
+                _ => menu.selected,
+            };
+            if top < menu.first {
+                menu.first = top;
+            } else if menu.selected >= menu.first + rows {
+                menu.first = menu.selected + 1 - rows;
+            }
+            menu.first = menu.first.min(menu_total().saturating_sub(rows));
         }
     }
     /// Keeps the chosen line of the list of contents among the lines that are on the screen (`rows` of them).
@@ -2564,6 +2702,7 @@ impl Viewer {
                 depth: item.depth,
                 text: plain(&item.title),
                 right: item.page.map_or_else(String::new, |p| format!("p.{}", p + 1)),
+                kind: peekel_core::card::LineKind::Item,
             })
             .collect();
         Some(TocList {
@@ -2611,14 +2750,15 @@ impl Viewer {
         let room = self.room();
         let shape = self.list_shape_in(room);
         if menu {
-            let Some(selected) = self.menu.as_ref().map(|m| m.selected) else {
+            let Some((selected, first)) = self.menu.as_ref().map(|m| (m.selected, m.first)) else {
                 return Ok(false);
             };
-            if before == selected {
+            if before == selected && first == first_before {
                 return Ok(false);
             }
-            let list = self.menu_list(selected);
-            self.list_strips("Settings", &list, before, selected, 0, shape, room)
+            let list = self.menu_list(shape.rows);
+            let scroll = first as isize - first_before as isize;
+            self.list_strips("Settings", &list, before, selected, scroll, shape, room)
         } else {
             let Some((selected, first)) = self.toc.as_ref().map(|t| (t.selected, t.first)) else {
                 return Ok(false);
@@ -2634,11 +2774,13 @@ impl Viewer {
         }
     }
 
-    /// The chosen row of the settings moved from `before`: only the strips of the two rows are drawn (as for the contents), else the
-    /// whole picture. Whether the whole picture has to be drawn after all.
-    fn menu_moved(&mut self, before: usize) -> Result<bool, String> {
+    /// The chosen row of the settings moved from `before` (the first line on the screen having been `first_before`): only the strips
+    /// that changed are drawn (as for the contents), else the whole picture. Whether the whole picture has to be drawn after all.
+    fn menu_moved(&mut self, before: usize, first_before: usize) -> Result<bool, String> {
         self.info = None;
         let room = self.room();
+        let shape = self.list_shape_in(room);
+        self.menu_fit(shape.rows);
         let Some(selected) = self.menu.as_ref().map(|m| m.selected) else {
             return Ok(true);
         };
@@ -2646,32 +2788,64 @@ impl Viewer {
         if before == selected || self.cell != self.told || !on_screen_is_this_size {
             return Ok(before != selected);
         }
-        let earliest = self.list_move.map_or(before, |(_, b, _)| b);
-        self.list_move = Some((true, earliest, 0));
+        let (earliest, earliest_first) = self.list_move.map_or((before, first_before), |(_, b, f)| (b, f));
+        self.list_move = Some((true, earliest, earliest_first));
         Ok(false)
     }
 
-    /// What is drawn of the screen of the settings: the rows, the chosen one marked, and the line under the title.
-    fn menu_list(&self, selected: usize) -> TocList {
-        let lines: Vec<peekel_core::card::ListLine> = self
-            .menu_rows()
-            .into_iter()
-            .map(|(label, value)| peekel_core::card::ListLine {
-                depth: 0,
-                text: label,
-                right: value,
-            })
-            .collect();
+    /// What is drawn of the screen of the settings: the `rows` lines on the screen (the names of the parts, the settings, and last
+    /// where they are saved), the chosen one marked, and under the title what the chosen setting does.
+    fn menu_list(&self, rows: usize) -> TocList {
+        let Some(menu) = self.menu.as_ref() else {
+            return TocList {
+                subtitle: String::new(),
+                lines: Vec::new(),
+                marked: None,
+                first: 0,
+                total: 0,
+            };
+        };
         let kept = self.settings.path().map_or_else(
-            || "not saved (--no-state)".to_string(),
-            |p| format!("saved in {}", p.display()),
+            || "Not saved (--no-state)".to_string(),
+            |p| format!("Saved in {}", p.display()),
         );
-        let total = lines.len();
+        let kept = format!("Enter, a click or right changes, left back; Esc closes. {kept}");
+        let all: Vec<peekel_core::card::ListLine> = MENU
+            .iter()
+            .map(|line| match line {
+                MenuLine::Part(name) => peekel_core::card::ListLine {
+                    depth: 0,
+                    text: (*name).to_string(),
+                    right: String::new(),
+                    kind: peekel_core::card::LineKind::Heading,
+                },
+                MenuLine::Row(setting) => {
+                    let (label, value) = self.setting_row(*setting);
+                    peekel_core::card::ListLine {
+                        depth: 1,
+                        text: label.to_string(),
+                        right: value,
+                        kind: peekel_core::card::LineKind::Item,
+                    }
+                }
+            })
+            .chain(std::iter::once(peekel_core::card::ListLine {
+                depth: 0,
+                text: plain(&kept),
+                right: String::new(),
+                kind: peekel_core::card::LineKind::Note,
+            }))
+            .collect();
+        let total = all.len();
+        let hint = match MENU.get(menu.selected) {
+            Some(MenuLine::Row(setting)) => setting_hint(*setting),
+            _ => "",
+        };
         TocList {
-            subtitle: plain(&format!("{kept}   Enter or a click changes, Esc closes")),
-            lines,
-            marked: Some(selected),
-            first: 0,
+            subtitle: hint.to_string(),
+            lines: all.into_iter().skip(menu.first).take(rows).collect(),
+            marked: menu.selected.checked_sub(menu.first),
+            first: menu.first,
             total,
         }
     }
@@ -2776,7 +2950,12 @@ impl Viewer {
         for at in wanted {
             let line = &list.lines[at];
             let marked = list.marked == Some(at);
-            let key = (line.text.clone(), line.right.clone(), line.depth, marked, widest);
+            // a heading is drawn otherwise than a line of the same text and depth
+            let depth = line.depth
+                + usize::from(line.kind != peekel_core::card::LineKind::Item)
+                    * 1000
+                    * (1 + usize::from(line.kind == peekel_core::card::LineKind::Note));
+            let key = (line.text.clone(), line.right.clone(), depth, marked, widest);
             if !self.row_cache.rows.contains_key(&key) {
                 let Some(stream) = strip_sixel(
                     || {
@@ -2944,7 +3123,7 @@ impl Viewer {
                         } else if peekel_core::pdf::is_pdf(&path) {
                             "this PDF has no text to search (a scan)"
                         } else {
-                            "only PDF, DjVu, FB2, EPUB and HTML can be searched"
+                            "only PDF, DjVu, FB2, EPUB, HTML and Word can be searched"
                         }
                         .to_string(),
                     );
@@ -3030,15 +3209,28 @@ impl Viewer {
             ));
             return Ok(());
         }
+        self.lay_out_again(
+            |viewer| {
+                peekel_core::book::set_text_size(percent);
+                viewer.settings.text_size = percent;
+            },
+            format!("the text of books at {percent} %"),
+            &format!("laying the book out at {percent} %…"),
+        )
+    }
+
+    /// Changes how books whose text flows are laid out (`change`), writes the settings and says `said`; the book on the screen, if it
+    /// is one, is laid out again (saying `laying` meanwhile) and opened where the reader was in its text. Any other file is not
+    /// touched: the change holds for the next such book.
+    fn lay_out_again(&mut self, change: impl FnOnce(&mut Self), said: String, laying: &str) -> Result<(), String> {
         let path = self.files.get(self.index).cloned();
         let book = path.filter(|p| !self.card && self.pages > 0 && text_flows(p));
-        // the place is taken at the old size, from the book laid out now
+        // the place is taken as the book is laid out now
         let place = book.as_ref().and_then(|p| place_of(p, self.page).ok().flatten());
-        peekel_core::book::set_text_size(percent);
-        self.settings.text_size = percent;
+        change(self);
         self.settings.save();
-        self.message = Some(format!("the text of books at {percent} %"));
-        // what was read ahead or kept was laid out at the old size, and so were the pages of a search
+        self.message = Some(said);
+        // what was read ahead or kept was laid out the old way, and so were the pages of a search
         self.preload = None;
         self.behind = None;
         self.texts = None;
@@ -3048,13 +3240,64 @@ impl Viewer {
         let Some(path) = book else {
             return Ok(());
         };
-        self.say(&format!("laying the book out at {percent} %…"))?;
+        self.say(laying)?;
         let page = place
             .and_then(|place| page_at(&path, place).ok().flatten())
             .unwrap_or(self.page);
         self.asked = Instant::now();
         self.pending = self.take_read(self.index, self.spread.start_of(page));
         Ok(())
+    }
+
+    /// Turns one of the switches of the look of books whose text flows (`Setting::Justify`, `MarkParagraphs`, `ChosenSize`,
+    /// `CodeBackdrop`) the other way; the book on the screen is laid out again.
+    fn set_book_look(&mut self, setting: Setting) -> Result<(), String> {
+        let s = &self.settings;
+        let (on, name) = match setting {
+            Setting::Justify => (!s.justify, "paragraphs justified"),
+            Setting::MarkParagraphs => (!s.mark_paragraphs, "paragraphs always set apart"),
+            Setting::ChosenSize => (!s.chosen_size, "the text at the size chosen"),
+            Setting::CodeBackdrop => (!s.code_backdrop, "code on a shade"),
+            _ => return Ok(()),
+        };
+        self.lay_out_again(
+            |viewer| {
+                match setting {
+                    Setting::Justify => viewer.settings.justify = on,
+                    Setting::MarkParagraphs => viewer.settings.mark_paragraphs = on,
+                    Setting::ChosenSize => viewer.settings.chosen_size = on,
+                    _ => viewer.settings.code_backdrop = on,
+                }
+                apply_book_look(&viewer.settings);
+            },
+            format!("{name}: {}", if on { "yes" } else { "no" }),
+            "laying the book out again…",
+        )
+    }
+
+    /// Makes the small pages of DjVu books as DjVuLibre makes them, or our way, and writes it in the settings; the book on the screen,
+    /// if it is one, is read again, its zoom and place kept.
+    fn set_scans_as_djvulibre(&mut self, on: bool) {
+        self.settings.scans_as_djvulibre = on;
+        apply_scans_look(&self.settings);
+        self.settings.save();
+        self.info = None;
+        self.message = Some(format!(
+            "DjVu: small pages {}",
+            if on { "as DjVuLibre makes them" } else { "made our way" }
+        ));
+        // what was read ahead or kept was made the other way
+        self.preload = None;
+        self.behind = None;
+        self.turned += 1;
+        if self
+            .files
+            .get(self.index)
+            .is_some_and(|p| !self.card && peekel_core::djvu::is_djvu(p))
+        {
+            self.asked = Instant::now();
+            self.pending = self.take_read(self.index, self.spread.start_of(self.page));
+        }
     }
 
     /// Sets the spread up another way and reads the pages again, the same first page (or the first of its pair) kept.
@@ -3116,6 +3359,21 @@ impl Viewer {
         self.pending = self.take_read(self.index, self.spread.start_of(self.page));
         Ok(())
     }
+}
+
+/// Tells the core how the settings say books whose text flows are laid out (the next book or page laid out follows it).
+fn apply_book_look(settings: &Settings) {
+    peekel_core::book::set_justify(settings.justify);
+    peekel_core::book::set_mark_paragraphs(settings.mark_paragraphs);
+    peekel_core::book::set_normalize_text(settings.chosen_size);
+    peekel_core::book::set_code_backdrop(settings.code_backdrop);
+}
+
+/// Tells the core how the settings say a small page of a DjVu book is made: both its background and its letters as DjVuLibre makes
+/// them, or both our way (the core keeps the two apart for measuring; a reader has one choice).
+fn apply_scans_look(settings: &Settings) {
+    peekel_core::djvu::set_shrink_as_djvulibre(settings.scans_as_djvulibre);
+    peekel_core::djvu::set_mask_as_djvulibre(settings.scans_as_djvulibre);
 }
 
 /// The alternate screen for as long as this lives; leaving it (and showing the cursor) also happens when a panic unwinds.
@@ -3202,6 +3460,8 @@ fn show(path: &Path, options: Options) -> Result<Report, String> {
     let spread = settings.spread(own);
     // a book whose text flows is laid out at the size of text chosen; left at another size, its page is found again from the place
     peekel_core::book::set_text_size(settings.text_size);
+    apply_book_look(&settings);
+    apply_scans_look(&settings);
     let (start, quarters) = match &remembered {
         Some(book) => {
             let start = spread.start_of(page_of(path, book));
@@ -3493,7 +3753,62 @@ fn ahead(index: usize, count: usize, page: usize, pages: usize, forward: bool) -
 #[cfg(test)]
 #[allow(clippy::expect_used)] // a test that cannot make its file should stop at once
 mod tests {
-    use super::{DecodeError, ahead, chapter_at, load, page_of_number, plain};
+    use super::{
+        DecodeError, MENU, MenuLine, Setting, ahead, chapter_at, load, menu_end, menu_next, page_of_number, plain,
+    };
+
+    #[test]
+    fn every_setting_is_on_the_screen_of_the_settings_once_and_the_keys_reach_it_past_the_names_of_the_parts() {
+        let all = [
+            Setting::TextSize,
+            Setting::Justify,
+            Setting::MarkParagraphs,
+            Setting::ChosenSize,
+            Setting::CodeBackdrop,
+            Setting::Night,
+            Setting::Scope,
+            Setting::Pages,
+            Setting::EqualHeight,
+            Setting::CoverAlone,
+            Setting::Scans,
+            Setting::ScansAsDjvulibre,
+            Setting::Browse,
+        ];
+        for setting in all {
+            let n = MENU.iter().filter(|l| **l == MenuLine::Row(setting)).count();
+            assert_eq!(n, 1, "{setting:?}");
+        }
+        // down from the first setting with the keys meets every setting, in order, never the name of a part, and stops at the last
+        let rows: Vec<usize> = (0..MENU.len())
+            .filter(|&i| matches!(MENU[i], MenuLine::Row(_)))
+            .collect();
+        let mut met = vec![menu_end(true)];
+        while let Some(&at) = met.last() {
+            let next = menu_next(at, true);
+            if next == at {
+                break;
+            }
+            met.push(next);
+        }
+        assert_eq!(met, rows);
+        assert_eq!(menu_end(false), *rows.last().expect("rows"));
+        // up from the first stays; up from the first setting of a part goes over its name to the last setting of the part before
+        assert_eq!(menu_next(rows[0], false), rows[0]);
+        assert!(
+            matches!(MENU[0], MenuLine::Part(_)),
+            "the list begins with the name of its first part"
+        );
+        let scans = MENU
+            .iter()
+            .position(|l| *l == MenuLine::Row(Setting::Scans))
+            .expect("scans");
+        let cover = MENU
+            .iter()
+            .position(|l| *l == MenuLine::Row(Setting::CoverAlone))
+            .expect("cover");
+        assert_eq!(menu_next(scans, false), cover);
+        assert_eq!(menu_next(cover, true), scans);
+    }
 
     #[test]
     fn the_number_typed_after_p_is_a_page_counted_from_one_and_kept_in_the_book() {

@@ -60,6 +60,8 @@ pub enum Action {
     GoToPage,
     /// The night look of books on or off (`b`): the pages dark and the text light.
     Night,
+    /// The paragraphs of a book whose text flows justified or as the book sets them (`t`), the book laid out again.
+    Justify,
     /// The pages of DjVu books drawn for the window or whole (`v`), to compare the two on the same page.
     Scans,
     /// The list of the keys, in place of the picture until any key is pressed.
@@ -193,6 +195,7 @@ pub fn action(key: &[u8]) -> Option<Action> {
         b"F" => TextSmaller,
         b"p" | b"P" => GoToPage,
         b"b" | b"B" => Night,
+        b"t" | b"T" => Justify,
         b"v" | b"V" => Scans,
         // F1 is `ESC O P` in xterm and most terminals, `ESC [ 11 ~` in some
         b"?" | b"\x1bOP" | b"\x1b[11~" => Help,
@@ -389,6 +392,14 @@ mod tests {
         assert_eq!(action(b"d"), Some(Action::SpreadPages));
         assert_eq!(action(b"o"), Some(Action::SpreadShift));
         assert_eq!(action(b"e"), Some(Action::EqualHeight));
+    }
+
+    #[test]
+    fn t_turns_the_justified_paragraphs_on_and_off_in_either_layout() {
+        assert_eq!(action(b"t"), Some(Action::Justify));
+        assert_eq!(action(b"T"), Some(Action::Justify));
+        // the key of t has е on it in the Russian layout
+        assert_eq!(latin_key('е'), Some('t'));
     }
 
     #[test]

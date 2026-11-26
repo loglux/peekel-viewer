@@ -1,4 +1,5 @@
-//! Which pages of a book are shown together: a spread of one, two or three pages side by side.
+//! Which pages of a book are shown together: a spread of one, two or three pages side by side. Without a screen: the viewer and
+//! Peekel TV (an Android app on this core) share it; the picture of a spread is `view::side_by_side`.
 
 /// How the pages of a book are put together on the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,8 +14,7 @@ pub struct Spread {
 }
 
 impl Spread {
-    /// Two pages, the cover alone, equally high: how a book is read (the defaults of the settings, as the tests know them).
-    #[cfg(test)]
+    /// Two pages, the cover alone, equally high: how a book is read (the defaults of the viewer's settings).
     pub const DEFAULT: Self = Self {
         count: 2,
         cover_alone: true,

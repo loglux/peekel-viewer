@@ -1,7 +1,7 @@
 # Peekel viewer
 
-**A file viewer for the terminal that also reads books.** `peekel` shows a picture, an SVG, the start of a Word, Excel, PowerPoint or
-OpenDocument file, and a card for any other file; and it reads PDF, DjVu, FB2 and EPUB books (and HTML pages) page by page, with their
+**A file viewer for the terminal that also reads books.** `peekel` shows a picture, an SVG, the start of an Excel, PowerPoint or
+OpenDocument file, and a card for any other file; and it reads PDF, DjVu, FB2 and EPUB books (and HTML pages and Word documents) page by page, with their
 contents, a search in the text and the place you stopped at kept. It draws with Sixel graphics in the terminal's own cells, so it works in Windows Terminal, on
 Linux and over SSH, and it can be the F3 viewer of Far Manager or Midnight Commander.
 
@@ -45,7 +45,8 @@ The screens are drawn from what the program wrote to a terminal of 130 x 36 cell
 |---|---|
 | PNG, JPEG, GIF (first frame), BMP, WebP, TIFF, SVG, JPEG XL, DDS | the picture |
 | RAW photographs (NEF, CR2, ARW, DNG, ORF, PEF and others) | the camera's own JPEG preview |
-| Word (.docx), PowerPoint (.pptx), Excel (.xlsx) | the start, the first slide, the top of the sheet |
+| Word (.docx) | read as a book: its pages, `c` its headings, `/` a search |
+| PowerPoint (.pptx), Excel (.xlsx) | the first slide, the top of the sheet |
 | OpenDocument (.odt, .ods, .odp) | the start, the top of the sheet, the first slide |
 | PDF (not password-protected) | the pages; `c` its bookmarks, `/` a search in its text (a scan has no text) |
 | DjVu (scanned books) | the pages; `c` its bookmarks, `/` a search in a book with a text layer |
@@ -129,15 +130,22 @@ Space and Backspace go to the next and the previous file of the folder. The line
 | `d`, `o`, `e` | pages side by side (2, 3, 1); the first page alone or with the second; pages equally high or not |
 | `r`, `R` | turn the page a quarter clockwise, back |
 | `f`, `F` | a larger, a smaller text in FB2, EPUB and HTML (70 to 200 %; the book is laid out again, you stay at your place) |
+| `t` | paragraphs that an EPUB, HTML or Word book sets left justified too, or left as the book sets them (a book whose style sheets justify its paragraphs does not change, nor does a book with no style sheet or an FB2 book, whose paragraphs are always justified; the book is laid out again, you stay at your place; kept in the settings) |
 | `b` | night: the pages of every book dark and the text light, for reading in the dark; again: as they are (kept in the settings) |
 
 The keys work with any keyboard layout in Windows Terminal, and with the Russian layout in any terminal.
 
-**The settings** (`s`, or the file `settings` beside the state below): pages side by side for each book or one choice for all, the
-defaults of a spread, the size of the text of FB2, EPUB and HTML, the night look of books, and **which files Space goes through**: pictures and documents (the
-default), books only (PDF, DjVu, FB2 and EPUB, for reading), or every file (the others shown as cards). The line `scans = window` (the
-default) draws the pages of DjVu books with the pixels the window needs, and again with more when you zoom in; `scans = whole` draws
-each page at the size of the scan.
+**The settings** (`s`, or the file `settings` beside the state below), in parts, the line under the title saying what the chosen one
+does:
+- books whose text flows (FB2, EPUB, HTML, Word): the size of the text; paragraphs justified even where the book sets them left; a
+  paragraph the book leaves with no indent and no space above it given an indent; the book's main size of text taken as the size you
+  chose; program code on a light shade;
+- pages: the night look of books; pages side by side for each book or one choice for all, and the defaults of a spread;
+- DjVu: the pages drawn with the pixels the window needs (`window`, the default, and again with more when you zoom in), twice those
+  (`finer`), or at the size of the scan (`whole`); small pages made as DjVuLibre makes them, or our way, with sharper letters (the
+  default);
+- **which files Space goes through**: pictures and documents (the default), books only (PDF, DjVu, FB2, EPUB and Word, for reading),
+  or every file (the others shown as cards).
 
 Options: `--cards` goes through every file for one run, `--no-state` neither keeps nor uses the place in each book, `--no-status`
 leaves out the line at the bottom, `--any-key` closes on any key, `--force` draws even when the terminal does not say it shows Sixel

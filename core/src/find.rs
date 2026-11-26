@@ -1,4 +1,5 @@
-//! A search in the text of a book: which pages have a word.
+//! A search in the text of a book: which pages have a word, and which hit to go to next. Pure arithmetic over the text, without a
+//! screen: the viewer and Peekel TV (an Android app on this core) share it.
 
 /// The text of a book made ready for a search: for each page, in lower case, with every run of white space and of the separators that
 /// DjVu puts between columns and paragraphs (US, GS, VT, FF) made one space.
@@ -9,7 +10,7 @@ pub struct Index {
 
 /// `text` as the search sees it: lower case, one space for each run of white space or separators. The same as the words of a page are
 /// made for the marking, so that what is found is what is marked.
-pub use peekel_core::djvu::normalise;
+pub use crate::djvu::normalise;
 
 impl Index {
     pub fn new(texts: &[String]) -> Self {

@@ -75,6 +75,17 @@ pub struct Settings {
     pub night: bool,
     /// How the pages of a scanned book (DjVu) are made (`v` goes through them).
     pub scans: Scans,
+    /// A DjVu page drawn at half its scan or smaller made as DjVuLibre makes it, its background and its letters
+    /// (`peekel_core::djvu::set_shrink_as_djvulibre`, `set_mask_as_djvulibre`); off, Peekel's own (sharper letters).
+    pub scans_as_djvulibre: bool,
+    /// Paragraphs a book sets left justified and hyphenated all the same (`peekel_core::book::set_justify`).
+    pub justify: bool,
+    /// A paragraph with no indent and no space above it given an indent, a table room below it (`book::set_mark_paragraphs`).
+    pub mark_paragraphs: bool,
+    /// The size most of a book's text is set in taken as the size chosen, the rest in proportion (`book::set_normalize_text`).
+    pub chosen_size: bool,
+    /// Blocks of program code drawn on a light shade (`book::set_code_backdrop`).
+    pub code_backdrop: bool,
     /// Where it is kept (nowhere: nothing is read or written).
     file: Option<PathBuf>,
 }
@@ -92,6 +103,11 @@ impl Settings {
             text_size: 100,
             night: false,
             scans: Scans::Window,
+            scans_as_djvulibre: false,
+            justify: true,
+            mark_paragraphs: true,
+            chosen_size: true,
+            code_backdrop: false,
             file: None,
         }
     }
@@ -183,6 +199,17 @@ impl Settings {
                     "whole" => self.scans = Scans::Whole,
                     _ => {}
                 },
+                "scans-as-djvulibre" | "justify" | "mark-paragraphs" | "chosen-size" | "code-backdrop" => {
+                    if let Some(v) = yes_no(&value) {
+                        *match name.as_str() {
+                            "scans-as-djvulibre" => &mut self.scans_as_djvulibre,
+                            "justify" => &mut self.justify,
+                            "mark-paragraphs" => &mut self.mark_paragraphs,
+                            "chosen-size" => &mut self.chosen_size,
+                            _ => &mut self.code_backdrop,
+                        } = v;
+                    }
+                }
                 // a path keeps its capitals
                 "fonts" => self.fonts = raw.to_string(),
                 _ => {}
@@ -209,19 +236,36 @@ impl Settings {
              cover-alone = {}\n\
              \n\
              # Which files of the folder Space and Backspace go through: every (a file that is no picture is shown as a card: its kind, size,\n\
-             # dates and what is inside), pictures (the pictures and documents the viewer reads), books (PDF, DjVu, FB2 and EPUB only).\n\
+             # dates and what is inside), pictures (the pictures and documents the viewer reads), books (PDF, DjVu, FB2, EPUB and Word only).\n\
              browse = {}\n\
              \n\
-             # The size of the text of FB2 and EPUB books and HTML pages, in per cent (70 to 200; f and F change it): the book is laid out again.\n\
+             # The size of the text of FB2, EPUB and Word books and HTML pages, in per cent (70 to 200; f and F change it): the book is laid out again.\n\
              text-size = {}\n\
              \n\
-             # The night look of books (PDF, DjVu, FB2, EPUB, HTML): the pages dark and the text light (yes), or as they are (no); b changes it.\n\
+             # Paragraphs a book sets left justified and hyphenated all the same (yes), or as the book sets them (no); centred and right stay so.\n\
+             justify = {}\n\
+             \n\
+             # A paragraph with no indent and no space above it given an indent, and a table room below it (yes), or as the book gives them (no).\n\
+             mark-paragraphs = {}\n\
+             \n\
+             # The size most of a book's text is set in taken as the size chosen, its headings and notes in proportion (yes), or the sizes\n\
+             # as the book gives them (no).\n\
+             chosen-size = {}\n\
+             \n\
+             # Blocks of program code drawn on a light shade (yes), or on the page (no).\n\
+             code-backdrop = {}\n\
+             \n\
+             # The night look of books (PDF, DjVu, FB2, EPUB, HTML, Word): the pages dark and the text light (yes), or as they are (no); b changes it.\n\
              night = {}\n\
              \n\
              # The pages of DjVu books (v goes through them): drawn for the window (window: the least memory, the quickest turning; a zoom\n\
              # draws the page again with more detail), with twice the pixels of the window and then shrunk (finer), or whole at the size of\n\
              # the scan and then shrunk (whole).\n\
              scans = {}\n\
+             \n\
+             # A DjVu page drawn at half its scan or smaller made as DjVuLibre (djview) makes it, its background and its letters (yes), or\n\
+             # Peekel's own way, with sharper letters (no).\n\
+             scans-as-djvulibre = {}\n\
              \n\
              # Folders of your own fonts (the originals copied from your Windows or Office), looked in first for the text of Word, Excel and\n\
              # PowerPoint pages and of cards; several folders are written the way PATH is (; on Windows, : elsewhere). Edit this file: it is not on the screen.\n\
@@ -239,8 +283,13 @@ impl Settings {
                 Listing::Books => "books",
             },
             self.text_size,
+            yes_no(self.justify),
+            yes_no(self.mark_paragraphs),
+            yes_no(self.chosen_size),
+            yes_no(self.code_backdrop),
             yes_no(self.night),
             self.scans.word(),
+            yes_no(self.scans_as_djvulibre),
             self.fonts,
         )
     }
@@ -357,6 +406,42 @@ mod tests {
         // v goes through the three and back
         assert_eq!(Scans::Window.next().next().next(), Scans::Window);
         assert_eq!(Scans::Window.next(), Scans::Finer);
+    }
+
+    #[test]
+    fn the_look_of_books_and_of_small_scans_has_the_core_s_defaults_and_survives_a_save() {
+        let s = Settings::none();
+        let core = (
+            peekel_core::book::justify(),
+            peekel_core::book::mark_paragraphs(),
+            peekel_core::book::normalize_text(),
+            peekel_core::book::code_backdrop(),
+            peekel_core::djvu::shrink_as_djvulibre(),
+        );
+        let ours = |s: &Settings| {
+            (
+                s.justify,
+                s.mark_paragraphs,
+                s.chosen_size,
+                s.code_backdrop,
+                s.scans_as_djvulibre,
+            )
+        };
+        assert_eq!(
+            ours(&s),
+            core,
+            "a viewer with no settings file looks as the core does by default"
+        );
+        let mut changed = Settings::none();
+        changed.parse(
+            "justify = no\nmark-paragraphs = off\nchosen-size = no\ncode-backdrop = yes\nscans-as-djvulibre = yes\n",
+        );
+        assert_eq!(ours(&changed), (false, false, false, true, true));
+        let mut again = Settings::none();
+        again.parse(&changed.text());
+        assert_eq!(ours(&again), (false, false, false, true, true));
+        again.parse("justify = maybe\n");
+        assert!(!again.justify, "a word not understood changes nothing");
     }
 
     #[test]

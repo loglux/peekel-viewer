@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "peekel"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "peekel-core",
  "peekel-term",
@@ -833,6 +833,7 @@ dependencies = [
  "peekel-djvu",
  "resvg",
  "roxmltree 0.21.2",
+ "simplecss",
  "skrifa 0.46.2",
 ]
 

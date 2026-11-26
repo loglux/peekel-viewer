@@ -66,7 +66,7 @@ pub enum Listing {
     Every,
     /// The pictures and the documents the viewer reads (the default).
     Pictures,
-    /// The books only (PDF, DjVu, FB2 and EPUB): the viewer as a reader.
+    /// The books only (PDF, DjVu, FB2, EPUB and Word): the viewer as a reader.
     Books,
 }
 
@@ -80,6 +80,7 @@ impl Listing {
                     || peekel_core::djvu::is_djvu(path)
                     || peekel_core::fb2::is_fb2(path)
                     || peekel_core::epub::is_epub(path)
+                    || peekel_core::docx::is_docx(path)
             }
         }
     }
