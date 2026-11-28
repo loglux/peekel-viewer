@@ -11,7 +11,7 @@
 //!   whose edges are far apart (the margin outside, on the left of one page and the right of the next). Which layout a page has is
 //!   told by its own lines, not by its number: a book where pages were taken out or put in does not keep to odd and even;
 //! - a layout's column: the edge most of its lines share on the left and on the right, the top and bottom of its lines, a little room
-//!   round them ([`PAD`]);
+//!   round them ([`PAD`]) and more below ([`BELOW`]: what hangs under the last line); a reader may tune it larger or smaller;
 //! - no column is given when the text is about as wide as the page, when nothing stands beside the column (cropping the margins does as
 //!   much), and when the pages' text does not keep to one column (two columns of text, a magazine's free layout, two pages scanned as one).
 
@@ -50,6 +50,12 @@ const PAGE_LETTERS: usize = 300;
 const PAGES_HELD: f64 = 0.95;
 /// The room left round the column, a part of the page's width (and of its height, the half of it).
 const PAD: f64 = 0.015;
+/// More room below the column's lowest lines, a part of the page's height: what hangs under a line (a fraction's denominator, a
+/// subscript, a formula set lower) on a page the pages read to find the column did not show. Calculus for Dummies: the lowest words of
+/// 17 pages in 377 were below the column without it, of 2 with it.
+const BELOW: f64 = 0.02;
+/// The most a reader's tuning moves each side of the column, a part of the page.
+const MOST_TUNE: f64 = 0.1;
 /// How many books' columns are kept.
 const KEEP: usize = 8;
 
@@ -122,8 +128,15 @@ pub fn columns(path: &Path) -> Result<Result<Columns, NoColumn>, DecodeError> {
 
 /// The column of page `page` (counted from 0) of the book at `path`, in the pixels of the page as `decode::decode_page` draws it. When
 /// `shape` (a width to a height) is given, the box is made that shape where the page has room for it: wider from the margin's side
-/// first (the margin seen as far as the screen allows), or taller; within the page.
-pub fn column_box(path: &Path, page: usize, shape: Option<f64>) -> Result<Result<PageBox, NoColumn>, DecodeError> {
+/// first (the margin seen as far as the screen allows), or taller; within the page. `tune` is the reader's own adjustment: a part of the
+/// page's width (on the left and right) and height (above and below) added on every side, taken in when below 0 (at most
+/// [`MOST_TUNE`]; the column never narrower or lower than a tenth of the page), before the box is made the screen's shape.
+pub fn column_box(
+    path: &Path,
+    page: usize,
+    shape: Option<f64>,
+    tune: f64,
+) -> Result<Result<PageBox, NoColumn>, DecodeError> {
     let book = match columns(path)? {
         Ok(book) => book,
         Err(why) => return Ok(Err(why)),
@@ -144,11 +157,12 @@ pub fn column_box(path: &Path, page: usize, shape: Option<f64>) -> Result<Result
     let Some(edges) = book.layouts.get(layout).or(book.layouts.first()) else {
         return Ok(Err(NoColumn::NoText));
     };
+    let edges = tuned(*edges, tune);
     let edges = match shape {
         Some(shape) if shape.is_finite() && shape > 0.0 => {
-            shaped(*edges, f64::from(width) / f64::from(height.max(1)), shape)
+            shaped(edges, f64::from(width) / f64::from(height.max(1)), shape)
         }
-        _ => *edges,
+        _ => edges,
     };
     Ok(Ok(to_box(edges, (width, height))))
 }
@@ -344,7 +358,7 @@ fn column_of(pages: &[&Vec<Piece>]) -> Result<Edges, NoColumn> {
         left: (left - PAD).max(0.0),
         top: (top - PAD / 2.0).max(0.0),
         right: (right + PAD).min(1.0),
-        bottom: (bottom + PAD / 2.0).min(1.0),
+        bottom: (bottom + PAD / 2.0 + BELOW).min(1.0),
     })
 }
 
@@ -439,6 +453,26 @@ fn percentile(mut values: Vec<f64>, part: f64) -> f64 {
     }
     values.sort_by(f64::total_cmp);
     values[((values.len() - 1) as f64 * part).round() as usize]
+}
+
+/// `edges` with `tune` of the page added on every side (taken in when below 0), within the page; as they were when that would leave
+/// them narrower or lower than a tenth of the page.
+fn tuned(edges: Edges, tune: f64) -> Edges {
+    if !tune.is_finite() {
+        return edges;
+    }
+    let tune = tune.clamp(-MOST_TUNE, MOST_TUNE);
+    let out = Edges {
+        left: (edges.left - tune).max(0.0),
+        top: (edges.top - tune).max(0.0),
+        right: (edges.right + tune).min(1.0),
+        bottom: (edges.bottom + tune).min(1.0),
+    };
+    if out.right - out.left < 0.1 || out.bottom - out.top < 0.1 {
+        edges
+    } else {
+        out
+    }
 }
 
 /// `edges` of a page of shape `page` (its width to its height) made `shape` where the page has room: wider from the side with more

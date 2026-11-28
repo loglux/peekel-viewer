@@ -1097,7 +1097,8 @@ fn load_scan_smaller(
         Detail::Scale(scale) => scale,
         Detail::Whole => 1.0,
     };
-    if scale > 0.5 {
+    // above a half a page is made small directly when it can be (a black and white scan), else it comes whole (see below)
+    if scale >= 0.999 {
         return None;
     }
     let read: Vec<_> = std::thread::scope(|scope| {
@@ -1109,9 +1110,20 @@ fn load_scan_smaller(
             .map(|h| h.join().ok().and_then(Result::ok))
             .collect()
     });
+    // every page came whole (above a half, a page that could not be made small directly): the spread is the whole pages, as when
+    // they are read whole, not shrunk here for nothing
+    let all_whole = scale > 0.5
+        && read.iter().enumerate().all(|(i, page)| {
+            page.as_ref()
+                .is_some_and(|(picture, _)| own.get(i) == Some(&picture.dimensions()))
+        });
     let mut pictures = Vec::new();
     for (i, page) in read.into_iter().enumerate() {
         let Some((mut picture, _)) = page else { break };
+        if all_whole {
+            pictures.push(turned_rgba(marked(start + i, picture), quarter(i)));
+            continue;
+        }
         // each page at exactly its part of its size, so that the pages keep their sizes against each other and the marks fall right
         let (w, h) = own[i];
         let side = |n: u32| ((f64::from(n) * scale).round() as u32).max(1);
@@ -1131,7 +1143,11 @@ fn load_scan_smaller(
         pictures.swap_remove(0)
     };
     Some(Loaded {
-        image: Image::reduced(picture, whole),
+        image: if all_whole {
+            Image::new(picture)
+        } else {
+            Image::reduced(picture, whole)
+        },
         shown: shown_count,
         pages,
         card: false,
@@ -3861,7 +3877,7 @@ mod tests {
         assert_eq!(finer.image.size(), (72, 72));
         assert_eq!(finer.image.short(&fit, (9, 9)), None);
         assert_eq!(finer.image.short(&fit, (18, 18)), None, "twice the room: still enough");
-        // a room larger than half the page: the whole page, as before
+        // a room larger than half the page, the background (24 x 24) too small to make the page at 60 from: the whole page, as before
         let large = read(Detail::Room((60, 60), 1.0), &[0]);
         assert_eq!(large.image.short(&fit, (72, 72)), None);
         assert_eq!(large.image.size(), (72, 72));
